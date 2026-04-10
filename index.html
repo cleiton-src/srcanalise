@@ -143,28 +143,15 @@ const db = firebase.firestore();
 const ADMIN_EMAIL = "cleiton19989309527@gmail.com";
 const WHATSAPP_NUMBER = "5519989309527";
 
-// ================= LISTA DE JOGOS REAIS (Forebet 10/04 e 11/04) =================
+// ================= LISTA DE JOGOS REAIS (Forebet) – ATUALIZADA =================
 const GAMES_DB = [
-    // 10/04/2026
-    { date: "2026-04-10", time: "14:00", league: "Eredivisie", home: "AZ Alkmaar", away: "NEC", odd: 1.22, prob15: 94, prob25: 76, cornersAvg: 10.2, cornersProb: 68, bttsProb: 62 },
-    { date: "2026-04-10", time: "14:30", league: "Eerste Divisie", home: "Jong PSV", away: "Den Bosch", odd: 1.20, prob15: 95, prob25: 78, cornersAvg: 11.0, cornersProb: 72, bttsProb: 65 },
-    { date: "2026-04-10", time: "15:30", league: "Bundesliga", home: "Bayern München", away: "Borussia Dortmund", odd: 1.22, prob15: 94, prob25: 76, cornersAvg: 10.5, cornersProb: 70, bttsProb: 68 },
-    { date: "2026-04-10", time: "13:30", league: "J-League", home: "Kawasaki Frontale", away: "Cerezo Osaka", odd: 1.25, prob15: 92, prob25: 74, cornersAvg: 9.8, cornersProb: 65, bttsProb: 58 },
-    { date: "2026-04-10", time: "12:00", league: "K-League", home: "FC Seoul", away: "Pohang Steelers", odd: 1.26, prob15: 91, prob25: 72, cornersAvg: 9.5, cornersProb: 62, bttsProb: 55 },
-    { date: "2026-04-10", time: "08:00", league: "A-League", home: "Melbourne City", away: "Western United", odd: 1.22, prob15: 94, prob25: 76, cornersAvg: 10.8, cornersProb: 70, bttsProb: 64 },
-    { date: "2026-04-10", time: "06:30", league: "NPL Victoria", home: "Melbourne Knights", away: "Heidelberg", odd: 1.24, prob15: 93, prob25: 75, cornersAvg: 11.2, cornersProb: 73, bttsProb: 66 },
-    { date: "2026-04-10", time: "16:00", league: "Eliteserien", home: "Bodø/Glimt", away: "Rosenborg", odd: 1.22, prob15: 94, prob25: 76, cornersAvg: 10.0, cornersProb: 67, bttsProb: 61 },
-    { date: "2026-04-10", time: "19:00", league: "Copa do Nordeste", home: "Ceará", away: "Fortaleza", odd: 1.38, prob15: 83, prob25: 63, cornersAvg: 9.2, cornersProb: 58, bttsProb: 54 },
-    { date: "2026-04-10", time: "21:30", league: "Brasileirão Série B", home: "Santos", away: "Avaí", odd: 1.35, prob15: 85, prob25: 65, cornersAvg: 9.0, cornersProb: 55, bttsProb: 50 },
-    // 11/04/2026
-    { date: "2026-04-11", time: "11:00", league: "Premier League", home: "Newcastle", away: "Everton", odd: 1.30, prob15: 89, prob25: 69, cornersAvg: 10.1, cornersProb: 66, bttsProb: 60 },
+    // Jogos de Hoje - 10/04/2026
+    { date: "2026-04-10", time: "06:45", league: "A-League", home: "Adelaide United", away: "Macarthur FC", odd: 1.25, prob15: 92, prob25: 74, cornersAvg: 11.2, cornersProb: 70, bttsProb: 65 },
+    { date: "2026-04-10", time: "07:30", league: "NPL NSW", home: "Sydney FC II", away: "Rockdale Ilinden", odd: 1.28, prob15: 90, prob25: 72, cornersAvg: 10.5, cornersProb: 68, bttsProb: 68 },
+    { date: "2026-04-10", time: "16:00", league: "Premier League", home: "West Ham", away: "Wolverhampton", odd: 1.32, prob15: 88, prob25: 68, cornersAvg: 10.1, cornersProb: 65, bttsProb: 55 },
+    // Jogos de Amanhã - 11/04/2026
     { date: "2026-04-11", time: "14:00", league: "Bundesliga", home: "Bayer Leverkusen", away: "Hoffenheim", odd: 1.22, prob15: 94, prob25: 76, cornersAvg: 10.5, cornersProb: 69, bttsProb: 63 },
-    { date: "2026-04-11", time: "12:30", league: "Eredivisie", home: "Feyenoord", away: "Utrecht", odd: 1.20, prob15: 95, prob25: 78, cornersAvg: 11.0, cornersProb: 72, bttsProb: 66 },
-    { date: "2026-04-11", time: "15:30", league: "Serie A", home: "Juventus", away: "Roma", odd: 1.30, prob15: 89, prob25: 69, cornersAvg: 9.8, cornersProb: 64, bttsProb: 58 },
-    { date: "2026-04-11", time: "17:00", league: "La Liga", home: "Atletico Madrid", away: "Rayo Vallecano", odd: 1.28, prob15: 90, prob25: 71, cornersAvg: 9.5, cornersProb: 62, bttsProb: 55 },
-    { date: "2026-04-11", time: "19:30", league: "Brasileirão Série A", home: "Flamengo", away: "Bahia", odd: 1.38, prob15: 83, prob25: 63, cornersAvg: 9.2, cornersProb: 58, bttsProb: 54 },
-    { date: "2026-04-11", time: "16:30", league: "Süper Lig", home: "Galatasaray", away: "Fenerbahçe", odd: 1.28, prob15: 90, prob25: 71, cornersAvg: 9.7, cornersProb: 63, bttsProb: 59 },
-    { date: "2026-04-11", time: "08:00", league: "J-League", home: "Urawa Reds", away: "Gamba Osaka", odd: 1.28, prob15: 90, prob25: 71, cornersAvg: 9.4, cornersProb: 61, bttsProb: 57 }
+    { date: "2026-04-11", time: "16:00", league: "La Liga", home: "Real Madrid", away: "Girona", odd: 1.25, prob15: 93, prob25: 75, cornersAvg: 9.8, cornersProb: 64, bttsProb: 60 }
 ];
 
 // ================= FUNÇÕES AUXILIARES =================
@@ -208,29 +195,16 @@ let bankroll = { balance: 0, totalInvested: 0, totalReturned: 0, greens: 0, reds
 let currentTab = "analysis";
 let topLimit = 30;
 
-// ================= CARREGAR JOGOS DA LISTA FIXA =================
+// ================= CARREGAR JOGOS DA LISTA FIXA (CORRIGIDO) =================
 function loadGamesFromList() {
-    const todayKey = dateKey(currentDate);
-    const now = getBrasiliaNow();
-    const filtered = GAMES_DB.filter(g => {
-        const gameDateTime = new Date(`${g.date}T${g.time}:00`);
-        return g.date === todayKey && gameDateTime > now;
-    }).map(g => {
-        const gameDateTime = new Date(`${g.date}T${g.time}:00`);
+    // Garante que pegamos a data no formato YYYY-MM-DD
+    const selectedDateStr = currentDate.toISOString().split('T')[0];
+    // Filtra os jogos pela data selecionada (ignora horário futuro para não sumir com jogos)
+    const filtered = GAMES_DB.filter(g => g.date === selectedDateStr).map(g => {
         const cons = consensusScore(g);
         return {
+            ...g,
             id: `${g.date}_${g.home}_${g.away}`,
-            datetime: gameDateTime.toISOString(),
-            time: g.time,
-            league: g.league,
-            home: g.home,
-            away: g.away,
-            odd: g.odd,
-            prob15: g.prob15,
-            prob25: g.prob25,
-            cornersAvg: g.cornersAvg,
-            cornersProb: g.cornersProb,
-            bttsProb: g.bttsProb,
             consensus: { approved: cons, total: 70, percent: Math.round(cons / 70 * 100) },
             stress: stress(g.odd)
         };
@@ -314,8 +288,9 @@ function renderTable(title, games, showSource = false, market = 'goals') {
                 <td>${g.league}${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
                 <td><strong>${g.home}</strong> vs <strong>${g.away}</strong>${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
                 <td class="${g.stress.class}">${g.odd.toFixed(2)}</td>
-                <td>${g.prob15}%</td><td>${g.prob25}%</td>
-                <td><div style="display:flex; gap:2px;">${dots}</div>${g.consensus.approved}/70</td>
+                <td>${g.prob15}%${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
+                <td>${g.prob25}%${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
+                <td><div style="display:flex; gap:2px;">${dots}</div>${g.consensus.approved}/70${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
                 <td><button class="btn-bet" onclick="window.open('https://betano.bet.br/sport/futebol/?q=${encodeURIComponent(g.home+' '+g.away)}','_blank')">Betano</button>
                     <button class="btn-bet" onclick="window.open('https://superbet.com.br/apostas-esportivas/futebol?q=${encodeURIComponent(g.home+' '+g.away)}','_blank')">Superbet</button>
                     <button class="btn-add" onclick="addToCart('${g.id}')">+</button>
@@ -326,7 +301,8 @@ function renderTable(title, games, showSource = false, market = 'goals') {
                 <td><strong>${g.time}</strong>${showSource ? `<div style="font-size:8px;color:#64748B">📋 Forebet</div>` : ''}</td>
                 <td>${g.league}${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
                 <td><strong>${g.home}</strong> vs <strong>${g.away}</strong>${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
-                <td>${g.cornersAvg.toFixed(1)}</td><td>${g.cornersProb}%</td>
+                <td>${g.cornersAvg.toFixed(1)}${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
+                <td>${g.cornersProb}%${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
                 <td><button class="btn-bet" onclick="window.open('https://betano.bet.br/sport/futebol/?q=${encodeURIComponent(g.home+' '+g.away)}','_blank')">Betano</button>
                     <button class="btn-bet" onclick="window.open('https://superbet.com.br/apostas-esportivas/futebol?q=${encodeURIComponent(g.home+' '+g.away)}','_blank')">Superbet</button>
                     <button class="btn-add" onclick="addToCart('${g.id}')">+</button>
@@ -337,7 +313,7 @@ function renderTable(title, games, showSource = false, market = 'goals') {
                 <td><strong>${g.time}</strong>${showSource ? `<div style="font-size:8px;color:#64748B">📋 Forebet</div>` : ''}</td>
                 <td>${g.league}${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
                 <td><strong>${g.home}</strong> vs <strong>${g.away}</strong>${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
-                <td>${g.bttsProb}%</td>
+                <td>${g.bttsProb}%${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
                 <td><button class="btn-bet" onclick="window.open('https://betano.bet.br/sport/futebol/?q=${encodeURIComponent(g.home+' '+g.away)}','_blank')">Betano</button>
                     <button class="btn-bet" onclick="window.open('https://superbet.com.br/apostas-esportivas/futebol?q=${encodeURIComponent(g.home+' '+g.away)}','_blank')">Superbet</button>
                     <button class="btn-add" onclick="addToCart('${g.id}')">+</button>
@@ -348,7 +324,7 @@ function renderTable(title, games, showSource = false, market = 'goals') {
                 <td><strong>${g.time}</strong>${showSource ? `<div style="font-size:8px;color:#64748B">📋 Forebet</div>` : ''}</td>
                 <td>${g.league}${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
                 <td><strong>${g.home}</strong> vs <strong>${g.away}</strong>${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
-                <td>${g.odd.toFixed(2)}</td>
+                <td>${g.odd.toFixed(2)}${!isPremium && !isAdmin && g.id !== display[0]?.id ? ' 🔒' : ''}</td>
                 <td><button class="btn-bet" onclick="window.open('https://betano.bet.br/sport/futebol/?q=${encodeURIComponent(g.home+' '+g.away)}','_blank')">Betano</button>
                     <button class="btn-bet" onclick="window.open('https://superbet.com.br/apostas-esportivas/futebol?q=${encodeURIComponent(g.home+' '+g.away)}','_blank')">Superbet</button>
                     <button class="btn-add" onclick="addToCart('${g.id}')">+</button>
@@ -363,7 +339,7 @@ function renderTable(title, games, showSource = false, market = 'goals') {
         <button class="top-btn ${topLimit === 15 ? 'active' : ''}" onclick="setTop(15)">TOP15</button>
         <button class="top-btn ${topLimit === 30 ? 'active' : ''}" onclick="setTop(30)">TOP30</button>
     </div>` : '';
-    return `${topBtns}<div class="table-container"><h3 style="padding:12px;">${title}</h3><tr><thead><tr>${cols.map(c => `<th>${c}</th>`).join('')} </tr></thead><tbody>${rows}</tbody> </table></div><div id="cartContainer"></div>`;
+    return `${topBtns}<div class="table-container"><h3 style="padding:12px;">${title}</h3><table><thead><tr>${cols.map(c => `<th>${c}</th>`).join('')} </tr></thead><tbody>${rows}</tbody> </table></div><div id="cartContainer"></div>`;
 }
 function renderAnalysis() { document.getElementById('dynamicContent').innerHTML = renderTable("📊 Análise do Dia", allGames, true, 'goals'); renderCart(); }
 function renderGoals() { document.getElementById('dynamicContent').innerHTML = renderTable("⚽ Gols / Over", allGames, true, 'goals'); renderCart(); }
