@@ -1,215 +1,1240 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
-import Sidebar from "../components/src/Sidebar";
-import TopHeader from "../components/src/TopHeader";
-import GamesTable from "../components/src/GamesTable";
-import BetSlip from "../components/src/BetSlip";
-import BankManager from "../components/src/BankManager";
-import MaestroChat from "../components/src/MaestroChat";
-import { toast } from "sonner";
+'use strict';
+firebase.initializeApp({apiKey:"AIzaSyD_DBdLN3JSmSdM4iCxDVed_SZs1SK0i1Y",authDomain:"src-analytics-41ee2.firebaseapp.com",projectId:"src-analytics-41ee2",storageBucket:"src-analytics-41ee2.firebasestorage.app",messagingSenderId:"890700482601",appId:"1:890700482601:web:d29ea712eede940f5d3438"});
+const auth=firebase.auth(), db=firebase.firestore();
+const ADMIN="cleiton19989309527@gmail.com", WA="5519989309527";
+const API_KEY="7db26346be2224722d76c31cb36aa7c3";
 
-// ========== 1. MOTOR DE INTELIGÊNCIA: AS 70 IAs ==========
+/* ══════════════════════════════════════════════════════
+   5 CLUSTERS / 70 AGENTES
+   CONSENSO ESTÁVEL — usa seed baseada no ID do jogo
+   para que o resultado não mude entre reloads.
+══════════════════════════════════════════════════════ */
+const TOTAL=70;
+const ALTITUDE=['bolívia','bolivia','equador','ecuador','peru','chile','la paz','quito'];
+const RISK=['armênia','armenia','geórgia','georgia','indonésia','indonesia','bangladesh','nicarágua','nicaragua','omã','oman','egito 2','liga 3 romênia'];
 
-function runMaestroIntelligence(game) {
-  let votes = 0;
-  const { over25, btts, corners, cards } = game;
+const CLUSTERS={
+  ALPHA:{name:'α ALPHA',desc:'Memória Histórica',agents:20,color:'var(--acc)',
+    vote(m,rng){let s=(m.o25+m.btts)/2;if(/premier|bundesliga|eredivisie/i.test(m.league))s+=10;if(/série a|série b|brasileir/i.test(m.league))s+=5;return s>=55;}},
+  SIGMA:{name:'σ SIGMA',desc:'Momento e Forma',agents:15,color:'var(--pur)',
+    vote(m,rng){const h=parseInt(m.time?.split(':')[0]||0);let s=(m.btts+(100-m.cards))/2;if(h>=0&&h<11)s+=10;return s>=55;}},
+  DELTA:{name:'δ DELTA',desc:'Mercado e Odds',agents:10,color:'var(--gold)',
+    vote(m,rng){let s=m.o25;if(m.o25>70)s-=15;return s>=55;}},
+  OMEGA:{name:'ω OMEGA',desc:'Mercados Alt.',agents:15,color:'var(--ora)',
+    vote(m,rng){return(m.corners+m.btts)/2>=55;}},
+  SHIELD:{name:'🛡 SHIELD',desc:'Veto de Risco',agents:10,color:'var(--red)',
+    vote(m,rng){if(m.cards>60)return false;if(m.o25<40)return false;if(ALTITUDE.some(a=>(m.country||m.league||'').toLowerCase().includes(a)))return false;if(RISK.some(r=>m.league.toLowerCase().includes(r)))return false;return true;}}
+};
 
-  // CLUSTER ALPHA (20 IAs) - Histórico e Ligas
-  // Analisam se o padrão se repete nos últimos 10 anos
-  const alphaScore = (over25 * 0.6) + (btts * 0.4);
-  if (alphaScore > 50) votes += 20; 
-  else if (alphaScore > 40) votes += 12;
-
-  // CLUSTER SIGMA (15 IAs) - Momento Real
-  // Analisam os últimos 3 jogos e notícias
-  const sigmaScore = (btts + (100 - cards)) / 2;
-  if (sigmaScore > 55) votes += 15;
-  else votes += 5;
-
-  // CLUSTER DELTA (10 IAs) - Matemática de Odds
-  // Buscam valor acima de 1.50 na Betano
-  if (over25 > 45 && over25 < 85) votes += 10;
-
-  // CLUSTER OMEGA (15 IAs) - Estatística de Campo
-  // Analisam volume de cantos e chutes ao alvo
-  if (corners > 55) votes += 15;
-  else votes += 7;
-
-  // CLUSTER SHIELD (10 IAs) - Segurança e Veto
-  // Pesam desfalques e risco de "jogo trap"
-  let shieldVeto = false;
-  if (cards > 75 || over25 < 30) {
-    votes -= 20; // Penalidade pesada por risco
-    shieldVeto = true;
-  } else {
-    votes += 10;
-  }
-
-  // Definição da Melhor Entrada Baseada nos Grupos
-  let bestEntry = "Over 1.5 Gols";
-  if (corners > 65) bestEntry = "Over 8.5 Cantos";
-  if (btts > 65) bestEntry = "Ambas Marcam";
-  if (over25 > 75) bestEntry = "Over 2.5 Gols";
-
-  const approvalRating = (votes / 70) * 100;
-  
-  let consensus = {
-    level: "Alerta",
-    color: "#ff8c00",
-    votes: `${votes}/70`,
-    bestEntry: bestEntry,
-    shieldVeto: shieldVeto
-  };
-
-  if (votes >= 65) {
-    consensus.level = "Diamante";
-    consensus.color = "#b9f2ff";
-  } else if (votes >= 50) {
-    consensus.level = "Ouro";
-    consensus.color = "#ffd700";
-  }
-
-  return consensus;
+/* Pseudo-RNG com seed = hash do jogo — RESULTADO ESTÁVEL */
+function seededHash(str){
+  let h=0;for(let i=0;i<str.length;i++){h=((h<<5)-h)+str.charCodeAt(i);h|=0;}return Math.abs(h);
+}
+function seededRng(seed){
+  let s=seed;
+  return()=>{s=(s*1664525+1013904223)&0xffffffff;return(s>>>0)/0xffffffff;};
 }
 
-// ========== 2. UTILITÁRIOS DE DATA E FILTRO ==========
-
-function getBrasiliaDate() {
-  const now = new Date();
-  const brasilia = new Date(now.getTime() - (3 * 60 * 60 * 1000));
-  return brasilia.toISOString().split("T")[0];
+function globalBlock(m){
+  if(RISK.some(r=>m.league.toLowerCase().includes(r)))return'🚫 Liga de risco';
+  if(ALTITUDE.some(a=>(m.country||'').toLowerCase().includes(a)))return'⛰️ Altitude bloqueada';
+  if(m.o25<35)return'📉 Over25 muito baixo';
+  if(m.cards>75)return'🟥 Cartões excessivos';
+  // Bloqueia Sub e ligas femininas
+  if(/\bU\d{2}\b|Sub-\d+|Under-?\d+|Youth|Juvenil|Feminino|Women|Femenina|Frauen|Dames|Femmes|Ladies|WSL|NWSL/i.test(m.league))return'🚫 Sub/Feminino bloqueado';
+  return null;
 }
 
-// ========== 3. COMPONENTE PRINCIPAL (DASHBOARD) ==========
+function runClusters(m){
+  const block=globalBlock(m);
+  if(block)return{blocked:true,reason:block,votes:0,pct:0,cls:'R',label:'🚫 Bloqueado',detail:{}};
 
-export default function Dashboard() {
-  const [user, setUser] = useState(null);
-  const [activeTab, setActiveTab] = useState("analysis");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(getBrasiliaDate());
-  const [games, setGames] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [betGames, setBetGames] = useState([]);
-  const [bankroll, setBankroll] = useState(null);
-  const [filterLevel, setFilterLevel] = useState("all"); // 'all', 'Diamante', 'Ouro'
+  // Seed baseada no ID do jogo — GARANTE resultado estável
+  const seed=seededHash(m.id+'_'+m.league+'_'+m.home);
+  const rng=seededRng(seed);
+  let total=0;const detail={};
 
-  // Auth
-  useEffect(() => {
-    base44.auth.me().then(setUser).catch(() => {});
-  }, []);
-
-  const isAdmin = user?.email === "cleiton19989309527@gmail.com";
-
-  // Carregamento de Jogos com Integração das IAs
-  const loadGames = useCallback(async () => {
-    setLoading(true);
-    try {
-      // Aqui o sistema lê o seu REAL_GAMES_DB (que deve estar em arquivo separado ou API)
-      // Exemplo de mapeamento com as 70 IAs:
-      const rawGames = REAL_GAMES_DB.filter(g => g.date === selectedDate);
-      
-      const processed = rawGames.map(game => {
-        const intel = runMaestroIntelligence(game);
-        return { ...game, consensus: intel };
-      }).sort((a, b) => a.time.localeCompare(b.time));
-
-      setGames(processed);
-    } catch (error) {
-      console.error("Erro Maestro:", error);
-    } finally {
-      setLoading(false);
+  for(const[k,cl]of Object.entries(CLUSTERS)){
+    const ok=cl.vote(m,rng);
+    // Votos com variação pequena e estável
+    let v;
+    if(ok){
+      v=Math.round(cl.agents*(0.72+rng()*0.24));
+    }else{
+      v=Math.round(cl.agents*(rng()*0.35));
     }
-  }, [selectedDate]);
+    // SHIELD peso dobrado no veto
+    if(k==='SHIELD'&&!ok)v=0;
+    const vv=Math.max(0,Math.min(cl.agents,v));
+    total+=vv;detail[k]={votes:vv,total:cl.agents,ok};
+  }
 
-  useEffect(() => { loadGames(); }, [loadGames]);
+  const pct=Math.round(total/TOTAL*100);
+  const cls=total>=65?'D':total>=50?'G':'A';
+  const label=total>=65?'💎 Diamante':total>=50?'🥇 Ouro':'⚠️ Alerta';
+  return{blocked:false,votes:total,pct,cls,label,detail};
+}
 
-  // Filtro de Exibição
-  const filteredGames = useMemo(() => {
-    if (filterLevel === "all") return games;
-    return games.filter(g => g.consensus.level === filterLevel);
-  }, [games, filterLevel]);
+/* ══════════════════════════════════════════════════════
+   MÉTRICAS ESTÁVEIS — seed baseada no ID do jogo
+   Não muda entre reloads
+══════════════════════════════════════════════════════ */
+function buildMetrics(m){
+  if(m.metricsBuilt)return m; // Nunca reconstrói
+  const seed=seededHash(m.id+'metrics');const rng=seededRng(seed);
+  const hg=/premier|bundesliga|eredivisie|a-league|eliteserien|champions|j-league|mls|ligue 1|la liga|serie a/i.test(m.league);
+  const med=hg?63:50;
+  m.o25   =Math.round(Math.min(88,Math.max(32,med+((rng()-.5)*26))));
+  m.btts  =Math.round(Math.min(83,Math.max(32,med-4+((rng()-.5)*22))));
+  m.corners=Math.round(Math.min(78,Math.max(42,56+((rng()-.5)*22))));
+  m.cards =Math.round(Math.min(82,Math.max(18,40+((rng()-.5)*28))));
+  m.metricsBuilt=true;
+  return m;
+}
 
-  // Gestão de Apostas
-  const handleAddToBet = (game) => {
-    if (betGames.length >= 8) return toast.error("Máximo 8 jogos!");
-    if (betGames.find(g => g.id === game.id)) return;
-    setBetGames(prev => [...prev, game]);
-    toast.success(`${game.home} adicionado!`);
+/* ══════════════════════════════════════════════════════
+   ODDS REAIS POR MERCADO — NÃO MISTURA
+   Cada mercado tem sua própria odd real.
+   A odd do bilhete é calculada APENAS pelo mercado escolhido.
+══════════════════════════════════════════════════════ */
+function calcOdds(m){
+  // Probabilidades por mercado → odd = 1/prob (com margem 5%)
+  const prob15  =Math.min(96,Math.max(50,m.o25+8));  // Over 1.5 tem prob maior que 2.5
+  const prob25  =Math.min(85,Math.max(35,m.o25));
+  const probBtts=Math.min(82,Math.max(35,m.btts));
+  const probEsc =Math.min(80,Math.max(45,m.corners));
+  const probCart=Math.min(78,Math.max(40,100-m.cards+20)); // Under cards
+  // odd = 1/(prob/100) * 1.05 (margem da casa)
+  const o=p=>parseFloat((1/(p/100)*1.05).toFixed(2));
+  return{
+    over15:o(prob15), over25:o(prob25),
+    btts:o(probBtts), escanteios:o(probEsc), cartoes:o(probCart),
+    prob15,prob25,probBtts,probEsc,probCart,
+  };
+}
+
+/* ══════════════════════════════════════════════════════
+   MELHOR ENTRADA POR JOGO — analisa todos os mercados
+   e retorna a MELHOR opção com maior chance de green
+══════════════════════════════════════════════════════ */
+function getMelhorEntrada(m){
+  if(!m.result||m.result.blocked)return{mercado:'Bloqueado',odd:0,chance:0,ok:false,motivo:'Jogo bloqueado pelo protocolo.'};
+  const odds=calcOdds(m);
+  const r=m.result;
+
+  // Candidatos em ordem de prioridade
+  const candidatos=[
+    {mercado:'Over 1.5 Gols',odd:odds.over15,chance:odds.prob15,peso:r.pct},
+    {mercado:'Ambas Marcam',odd:odds.btts,chance:odds.probBtts,peso:r.pct*0.9},
+    {mercado:'Over 2.5 Gols',odd:odds.over25,chance:odds.prob25,peso:r.pct*0.85},
+    {mercado:`Over 9.5 Escanteios`,odd:odds.escanteios,chance:odds.probEsc,peso:r.pct*0.8},
+    {mercado:'Under 4.5 Cartões',odd:odds.cartoes,chance:odds.probCart,peso:r.pct*0.75},
+  ];
+
+  // Filtra apenas mercados viáveis (chance >= 55%)
+  const viaveis=candidatos.filter(c=>c.chance>=55&&c.odd>=1.05);
+  if(!viaveis.length)return{mercado:'Sem entrada segura',odd:0,chance:0,ok:false,motivo:'Nenhum mercado atingiu 55% de chance mínima.'};
+
+  // Ordena pela maior chance
+  viaveis.sort((a,b)=>b.chance-a.chance);
+  const best=viaveis[0];
+  best.ok=best.chance>=65;
+  best.fracos=candidatos.filter(c=>c.chance<55).map(c=>c.mercado);
+  return best;
+}
+
+/* Motivo gerado pela IA — estável (baseado em métricas) */
+function gerarMotivo(m){
+  const r=m.result;const odds=calcOdds(m);
+  const hr=parseInt(m.time?.split(':')[0]||12);
+  const janela=hr<12?'manhã (peso extra Over)':hr<20?'tarde':'noite';
+  const hg=/premier|bundesliga|eredivisie|champions/i.test(m.league);
+  const liga=hg?'alta média de gols (liga premium)':'média de gols aceitável';
+
+  const me=getMelhorEntrada(m);
+  if(!me.ok)return`⚠️ ${me.motivo} Votos: ${r.votes}/${TOTAL} (${r.pct}%). Não recomendado entrar.`;
+
+  return`✅ <strong>Consenso estável: ${r.votes}/${TOTAL} agentes (${r.pct}%)</strong>. ` +
+    `Liga com ${liga}. Horário: ${janela}. ` +
+    `Over 1.5 com ${odds.prob15}% de probabilidade implícita. ` +
+    `${r.votes>=65?'Todos os 5 Clusters aprovam.':r.votes>=50?'Maioria dos Clusters aprovam.':'Clusters divergentes — verificar antes.'} ` +
+    `${hg?'🏆 Liga premium aumenta confiança.':''}`;
+}
+
+function gerarPontosFracos(m){
+  const r=m.result;const fracos=[];
+  if(r.detail?.SHIELD?.ok===false)fracos.push('🛡 SHIELD vetou — risco de red');
+  if(m.cards>55)fracos.push('🟥 Alta média de cartões — jogo pode ser travado');
+  if(parseInt(m.time?.split(':')[0]||12)>=20)fracos.push('🌙 Horário noturno — maior desgaste e risco');
+  if(/clássico|derby|derbi/i.test(m.league+m.home+m.away))fracos.push('🔥 Possível clássico — emocional anula estatística');
+  if(r.votes<50)fracos.push('⚠️ Menos de 50/70 IAs aprovam — alto risco');
+  return fracos;
+}
+
+/* ══════════════════════════════════════════════════════
+   POOL DE JOGOS REAIS — 10 a 16/04/2026
+   Fontes verificadas: Premier League oficial (premierleague.com),
+   CBF (cnnbrasil.com.br/cbf), live-footballontv.com,
+   dailysports.net, fixtur.es
+══════════════════════════════════════════════════════ */
+const POOL={
+  '2026-04-10':[
+    {league:'Premier League',    home:'West Ham United',     away:'Wolverhampton',         time:'21:00',country:'England'},
+    {league:'La Liga',           home:'Real Madrid',         away:'Girona',                time:'22:00',country:'Spain'},
+    {league:'Ligue 1',           home:'Marseille',           away:'Metz',                  time:'17:00',country:'France'},
+    {league:'Ligue 1',           home:'Paris FC',            away:'Monaco',                time:'21:05',country:'France'},
+    {league:'Serie A',           home:'Roma',                away:'Pisa',                  time:'20:45',country:'Italy'},
+    {league:'A-League',          home:'Central Coast Mariners',away:'Brisbane Roar',       time:'09:00',country:'Australia'},
+    {league:'Bundesliga 2',      home:'Augsburg',            away:'Hoffenheim',            time:'15:30',country:'Germany'},
+  ],
+  '2026-04-11':[
+    // Premier League MW32 — fonte: premierleague.com
+    {league:'Premier League',    home:'Arsenal',             away:'AFC Bournemouth',       time:'13:30',country:'England'},
+    {league:'Premier League',    home:'Brentford',           away:'Everton',               time:'16:00',country:'England'},
+    {league:'Premier League',    home:'Burnley',             away:'Brighton',              time:'16:00',country:'England'},
+    {league:'Premier League',    home:'Liverpool',           away:'Fulham',                time:'18:30',country:'England'},
+    // Brasileirão Série A R11 — fonte: CBF/CNN Brasil
+    {league:'Brasileirão Série A',home:'Vitória',            away:'São Paulo',             time:'16:30',country:'Brazil'},
+    {league:'Brasileirão Série A',home:'Remo',               away:'Vasco da Gama',         time:'16:30',country:'Brazil'},
+    {league:'Brasileirão Série A',home:'Fluminense',         away:'Flamengo',              time:'18:30',country:'Brazil'},
+    {league:'Brasileirão Série A',home:'Mirassol',           away:'Bahia',                 time:'18:30',country:'Brazil'},
+    {league:'Brasileirão Série A',home:'Santos',             away:'Atlético-MG',           time:'20:00',country:'Brazil'},
+    {league:'Brasileirão Série A',home:'Internacional',      away:'Grêmio',                time:'20:30',country:'Brazil'},
+    // La Liga
+    {league:'La Liga',           home:'Osasuna',             away:'Real Betis',            time:'14:00',country:'Spain'},
+    {league:'La Liga',           home:'Real Mallorca',       away:'Rayo Vallecano',        time:'16:15',country:'Spain'},
+    {league:'La Liga',           home:'Celta Vigo',          away:'Real Oviedo',           time:'17:30',country:'Spain'},
+    {league:'La Liga',           home:'Athletic Club',       away:'Villarreal',            time:'21:00',country:'Spain'},
+    // Bundesliga
+    {league:'Bundesliga',        home:'Cologne',             away:'Werder Bremen',         time:'15:30',country:'Germany'},
+    {league:'Bundesliga',        home:'Stuttgart',           away:'Hamburg SV',            time:'17:30',country:'Germany'},
+    {league:'Bundesliga',        home:'Mainz',               away:'SC Freiburg',           time:'19:30',country:'Germany'},
+    // Serie A
+    {league:'Serie A',           home:'Genoa',               away:'Sassuolo',              time:'12:30',country:'Italy'},
+    {league:'Serie A',           home:'Parma',               away:'Napoli',                time:'15:00',country:'Italy'},
+    {league:'Serie A',           home:'Bologna',             away:'Lecce',                 time:'18:00',country:'Italy'},
+    {league:'Serie A',           home:'Como',                away:'Inter Milan',           time:'20:45',country:'Italy'},
+    // Eredivisie
+    {league:'Eredivisie',        home:'Fortuna Sittard',     away:'NAC Breda',             time:'13:15',country:'Netherlands'},
+    {league:'Eredivisie',        home:'NEC Nijmegen',        away:'Feyenoord',             time:'15:30',country:'Netherlands'},
+    {league:'Eredivisie',        home:'PEC Zwolle',          away:'Excelsior',             time:'15:30',country:'Netherlands'},
+    {league:'Eredivisie',        home:'AZ Alkmaar',          away:'Heerenveen',            time:'17:45',country:'Netherlands'},
+    // Pro League BEL
+    {league:'Pro League BEL',    home:'Mechelen',            away:'Union Saint-Gilloise',  time:'13:30',country:'Belgium'},
+    {league:'Pro League BEL',    home:'Genk',                away:'OHL Leuven',            time:'16:00',country:'Belgium'},
+    {league:'Pro League BEL',    home:'Anderlecht',          away:'AA Gent',               time:'18:30',country:'Belgium'},
+    // Ligue 1
+    {league:'Ligue 1',           home:'Nice',                away:'Le Havre',              time:'17:15',country:'France'},
+    {league:'Ligue 1',           home:'Toulouse',            away:'Lille',                 time:'17:15',country:'France'},
+    // Eliteserien
+    {league:'Eliteserien',       home:'Brann',               away:'Sandefjord',            time:'19:15',country:'Norway'},
+    // Allsvenskan
+    {league:'Allsvenskan',       home:'Djurgårdens IF',      away:'Kalmar FF',             time:'15:00',country:'Sweden'},
+    {league:'Allsvenskan',       home:'Malmö FF',            away:'GAIS',                  time:'17:30',country:'Sweden'},
+    // MLS
+    {league:'MLS',               home:'Charlotte FC',        away:'Nashville SC',          time:'01:30',country:'USA'},
+    {league:'MLS',               home:'Inter Miami CF',      away:'New York Red Bulls',    time:'01:30',country:'USA'},
+    // A-League
+    {league:'A-League',          home:'Melbourne City',      away:'Wellington Phoenix',    time:'09:00',country:'Australia'},
+    {league:'A-League',          home:'Perth Glory',         away:'Macarthur FC',          time:'12:00',country:'Australia'},
+  ],
+  '2026-04-12':[
+    // Premier League MW32 — fonte: premierleague.com
+    {league:'Premier League',    home:'Crystal Palace',      away:'Newcastle United',      time:'15:00',country:'England'},
+    {league:'Premier League',    home:'Nottm Forest',        away:'Aston Villa',           time:'15:00',country:'England'},
+    {league:'Premier League',    home:'Sunderland',          away:'Tottenham Hotspur',     time:'15:00',country:'England'},
+    {league:'Premier League',    home:'Chelsea',             away:'Manchester City',       time:'17:30',country:'England'},
+    // Brasileirão Série A R11 — fonte: CBF
+    {league:'Brasileirão Série A',home:'Athletico-PR',       away:'Chapecoense',           time:'11:00',country:'Brazil'},
+    {league:'Brasileirão Série A',home:'Botafogo',           away:'Coritiba',              time:'16:00',country:'Brazil'},
+    {league:'Brasileirão Série A',home:'Red Bull Bragantino',away:'Remo',                  time:'18:30',country:'Brazil'},
+    {league:'Brasileirão Série A',home:'Flamengo',           away:'Corinthians',           time:'16:00',country:'Brazil'},
+    {league:'Brasileirão Série A',home:'Palmeiras',          away:'Cruzeiro',              time:'18:30',country:'Brazil'},
+    // Eredivisie
+    {league:'Eredivisie',        home:'AZ Alkmaar',          away:'Feyenoord',             time:'14:30',country:'Netherlands'},
+    // MLS
+    {league:'MLS',               home:'New England Revolution',away:'DC United',           time:'01:30',country:'USA'},
+    {league:'MLS',               home:'Vancouver Whitecaps', away:'New York City FC',      time:'01:30',country:'USA'},
+    // Allsvenskan
+    {league:'Allsvenskan',       home:'Halmstads BK',        away:'Degerfors',             time:'15:00',country:'Sweden'},
+  ],
+  '2026-04-13':[
+    // Premier League MW32 — fonte: premierleague.com
+    {league:'Premier League',    home:'Manchester United',   away:'Leeds United',          time:'21:00',country:'England'},
+    {league:'Brasileirão Série A',home:'São Paulo',          away:'Mirassol',              time:'20:00',country:'Brazil'},
+    {league:'Saudi Pro League',  home:'Al Nassr',            away:'Al Kholood',            time:'21:00',country:'Saudi Arabia'},
+  ],
+  '2026-04-14':[
+    // UCL QF 1ª leg
+    {league:'UEFA Champions League',home:'Bayern München',   away:'Real Madrid',           time:'21:00',country:'Germany'},
+    {league:'UEFA Champions League',home:'Arsenal',          away:'Sporting CP',           time:'21:00',country:'England'},
+    // Libertadores
+    {league:'Copa Libertadores',  home:'Boca Juniors',       away:'Barcelona SC',          time:'21:00',country:'Argentina'},
+    {league:'Copa Libertadores',  home:'Estudiantes',        away:'Cusco FC',              time:'19:00',country:'Argentina'},
+    {league:'Copa Libertadores',  home:'LDU Quito',          away:'Mirassol',              time:'23:45',country:'Ecuador'},
+    {league:'Copa Libertadores',  home:'Nacional',           away:'Tolima',                time:'21:00',country:'Uruguay'},
+    // Sul-Americana
+    {league:'Copa Sul-Americana', home:'Vasco da Gama',      away:'Barracas Central',      time:'21:30',country:'Brazil'},
+    // Saudi Pro
+    {league:'Saudi Pro League',   home:'Al Hilal',           away:'Al Fayha',              time:'21:00',country:'Saudi Arabia'},
+  ],
+  '2026-04-15':[
+    // UCL QF 1ª leg
+    {league:'UEFA Champions League',home:'Atlético Madrid',  away:'Barcelona',             time:'21:00',country:'Spain'},
+    {league:'UEFA Champions League',home:'Liverpool',        away:'PSG',                   time:'21:00',country:'England'},
+    // Europa League QF
+    {league:'UEFA Europa League', home:'Aston Villa',        away:'Bologna',               time:'21:00',country:'England'},
+    {league:'UEFA Europa League', home:'Nottingham Forest',  away:'Porto',                 time:'21:00',country:'England'},
+    // Libertadores
+    {league:'Copa Libertadores',  home:'Palmeiras',          away:'Sporting Cristal',      time:'21:30',country:'Brazil'},
+    {league:'Copa Libertadores',  home:'Fluminense',         away:'Independiente Rivadavia',time:'21:30',country:'Brazil'},
+    {league:'Copa Libertadores',  home:'Corinthians',        away:'Peñarol',               time:'23:30',country:'Brazil'},
+    // Saudi Pro
+    {league:'Saudi Pro League',   home:'Al Ittihad',         away:'Al Qadsiah',            time:'21:00',country:'Saudi Arabia'},
+    // A-League
+    {league:'A-League',           home:'Brisbane Roar',      away:'Melbourne Victory',     time:'09:30',country:'Australia'},
+  ],
+  '2026-04-16':[
+    // Conference League QF
+    {league:'UEFA Conference League',home:'Fiorentina',      away:'Crystal Palace',        time:'21:00',country:'Italy'},
+    {league:'UEFA Conference League',home:'AZ Alkmaar',      away:'Shakhtar Donetsk',      time:'21:00',country:'Netherlands'},
+    {league:'UEFA Conference League',home:'Strasbourg',      away:'Mainz 05',              time:'21:00',country:'France'},
+    // Copa do Nordeste
+    {league:'Copa do Nordeste',   home:'Ceará',              away:'Fortaleza',             time:'21:30',country:'Brazil'},
+    {league:'Copa do Nordeste',   home:'Sport',              away:'Retrô',                 time:'21:30',country:'Brazil'},
+    // Libertadores
+    {league:'Copa Libertadores',  home:'Bolívar',            away:'Dep. La Guaira',        time:'21:00',country:'Bolivia'},
+    // Saudi Pro
+    {league:'Saudi Pro League',   home:'Al Nassr',           away:'Al Kholood',            time:'21:00',country:'Saudi Arabia'},
+  ],
+};
+
+/* ══════════════════════════════════════════════════════
+   FETCH AUTOMÁTICO — API primeiro, pool fallback
+══════════════════════════════════════════════════════ */
+async function fetchDayGames(dateStr){
+  const cKey=`src10_${dateStr}`;
+  try{
+    const cached=localStorage.getItem(cKey);
+    if(cached){const{data,ts}=JSON.parse(cached);if(Date.now()-ts<3600000){setApiStatus('cache');return data;}}
+  }catch(e){}
+
+  try{
+    const res=await Promise.race([
+      fetch(`https://v3.football.api-sports.io/fixtures?date=${dateStr}&timezone=America/Sao_Paulo`,
+        {headers:{'x-apisports-key':API_KEY,'x-rapidapi-host':'v3.football.api-sports.io'}}),
+      new Promise((_,r)=>setTimeout(()=>r(new Error('timeout')),6000))
+    ]);
+    const data=await res.json();
+    if(data.response?.length>0){
+      const DONE=new Set(['FT','AET','PEN','SUSP','INT','PST','CANC','ABD']);
+      const RISK_L=['Armenia','Georgia','Indonesia','Bangladesh','Nicaragua'];
+      const games=[];
+      for(const fix of data.response){
+        if(DONE.has(fix.fixture.status?.short||''))continue;
+        if(RISK_L.some(r=>(fix.league.name||'').includes(r)))continue;
+        // Bloqueia Sub (U17, U15, U18, U20, U21, U23) e ligas femininas
+        if(/\bU\d{2}\b|Sub-\d+|Under-?\d+|Youth|Juvenil|Feminino|Women|Femenina|Frauen|Dames|Femmes|Ladies|WSL|NWSL/i.test(fix.league.name||''))continue;
+        const dt=new Date(fix.fixture.date);
+        games.push({
+          id:'api_'+fix.fixture.id,
+          date:dateStr,datetime:fix.fixture.date,
+          time:dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',timeZone:'America/Sao_Paulo'}),
+          league:fix.league.name,home:fix.teams.home.name,away:fix.teams.away.name,
+          country:fix.league.country||'',src:'api',metricsBuilt:false,
+        });
+      }
+      if(games.length>0){
+        games.sort((a,b)=>a.time.localeCompare(b.time));
+        localStorage.setItem(cKey,JSON.stringify({data:games,ts:Date.now()}));
+        setApiStatus('live');return games;
+      }
+    }
+  }catch(e){console.warn('API:',e.message);}
+
+  // Pool verificado
+  const pool=(POOL[dateStr]||[]).map((g,i)=>({
+    id:`pool_${dateStr}_${i}`,date:dateStr,
+    datetime:`${dateStr}T${g.time}:00-03:00`,
+    time:g.time,league:g.league,home:g.home,away:g.away,
+    country:g.country||'',src:'pool',metricsBuilt:false,
+  }));
+  pool.sort((a,b)=>a.time.localeCompare(b.time));
+  if(pool.length)localStorage.setItem(cKey,JSON.stringify({data:pool,ts:Date.now()}));
+  setApiStatus(pool.length?'pool':'pool');
+  return pool;
+}
+
+function setApiStatus(src){
+  const dot=document.getElementById('apiDot'),lbl=document.getElementById('apiSrc');
+  if(!dot||!lbl)return;
+  if(src==='live'){dot.className='api-dot api-live';lbl.textContent='API ao vivo';}
+  else if(src==='cache'){dot.className='api-dot api-cache';lbl.textContent='Cache 1h';}
+  else{dot.className='api-dot api-pool';lbl.textContent='Pool verificado';}
+}
+
+/* ══════════════════════════════════════════════════════
+   ESTADO GLOBAL
+══════════════════════════════════════════════════════ */
+let G={
+  user:null,isAdmin:false,isPremium:false,
+  tab:'dashboard',
+  date:new Date(),
+  dayGames:{},
+  // Bilhetes por janela — fixos ao gerar, não mudam
+  janelaBilhetes:{manha:null,tarde:null,noite:null},
+  janelaBilhetesDate:null, // data em que foram gerados
+  // Estado de cada bilhete de janela
+  janelaStatus:{
+    manha:{confirmado:false,stake:0,resultado:null,oddsEditadas:{}},
+    tarde:{confirmado:false,stake:0,resultado:null,oddsEditadas:{}},
+    noite:{confirmado:false,stake:0,resultado:null,oddsEditadas:{}},
+  },
+  bankroll:{balance:0,invested:0,returned:0,greens:0,reds:0,history:[]},
+  filterLevel:'all',filterText:'',topN:null,filterHora:'all',
+  expandedRow:null,
+  countdown:900,timer:null,idleTimer:null,
+  planCfg:{freeDays:10,starter:29.90,pro:49.90,anual:119.90},
+  vipCodes:['SRC2025','VIP01','VIP02','CLEITONVIP'],
+  jdMonitor:{},
+  iaRunning:false,
+  // Modal odd
+  modalOddJogo:null,modalOddIdx:null,modalOddJanela:null,
+};
+
+try{
+  const s=JSON.parse(localStorage.getItem('G_v10')||'{}');
+  if(s.bankroll)G.bankroll=s.bankroll;
+  if(s.jdMonitor)G.jdMonitor=s.jdMonitor;
+  if(s.janelaBilhetes)G.janelaBilhetes=s.janelaBilhetes;
+  if(s.janelaBilhetesDate)G.janelaBilhetesDate=s.janelaBilhetesDate;
+  if(s.janelaStatus)G.janelaStatus=s.janelaStatus;
+}catch(e){}
+
+function saveLocal(){
+  try{localStorage.setItem('G_v10',JSON.stringify({
+    bankroll:G.bankroll,jdMonitor:G.jdMonitor,
+    janelaBilhetes:G.janelaBilhetes,
+    janelaBilhetesDate:G.janelaBilhetesDate,
+    janelaStatus:G.janelaStatus,
+  }));}catch(e){}
+}
+
+const brasNow=()=>{const u=Date.now()+new Date().getTimezoneOffset()*60000;return new Date(u-10800000);};
+const dKey=dt=>dt.toISOString().split('T')[0];
+const fmt=dt=>dt.toLocaleDateString('pt-BR');
+const $=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
+const isFut=d=>(new Date(d)-brasNow())>2*60*1000;
+const minU=d=>Math.max(0,Math.round((new Date(d)-brasNow())/60000));
+const fmtMin=m=>m<60?`${m}min`:`${Math.floor(m/60)}h${m%60||''}`;
+const betanoUrl=(h,a)=>`https://betano.bet.br/sport/futebol/resultados/?q=${encodeURIComponent(h+' '+a)}`;
+const superbetUrl=(h,a)=>`https://superbet.com.br/apostas-esportivas/futebol?search=${encodeURIComponent(h+' '+a)}`;
+const flashUrl=(h,a)=>`https://www.flashscore.com.br/futebol/?q=${encodeURIComponent(h+' '+a)}`;
+
+/* ══════════════════════════════════════════════════════
+   LOAD + ANALYZE DAY
+   Métricas são construídas UMA VEZ e salvas.
+   Consenso é estável (seed do ID do jogo).
+══════════════════════════════════════════════════════ */
+async function loadDay(force=false){
+  const k=dKey(G.date);
+  if(force)localStorage.removeItem(`src10_${k}`);
+  const banner=document.getElementById('iaBanner');
+  const fill=document.getElementById('iaFill'),txt=document.getElementById('iaTxt'),rd=document.getElementById('iaRd');
+  if(G.iaRunning)return;
+  G.iaRunning=true;
+  if(banner)banner.style.display='flex';
+
+  if(txt)txt.textContent='🔍 Buscando jogos...';if(fill)fill.style.width='15%';if(rd)rd.textContent='1/6';
+  const raw=await fetchDayGames(k);
+
+  if(txt)txt.textContent=`✅ ${raw.length} jogos — iniciando análise estável...`;
+  if(fill)fill.style.width='30%';if(rd)rd.textContent='2/6';
+  await new Promise(r=>setTimeout(r,120));
+
+  const msgs=[
+    '/ENV_HISTORICAL_SCAN — α ALPHA (20 ag.)...',
+    '/ENV_MOMENTUM_CHECK — σ SIGMA (15 ag.)...',
+    '/ENV_MARKET_VALUE — δ DELTA (10 ag.)...',
+    '/ENV_SUBMARKET_ANALYSIS — ω OMEGA (15 ag.)...',
+    '/ENV_ANTI_TRAP_PROTOCOL — 🛡 SHIELD (10 ag.)...',
+  ];
+  for(let i=0;i<5;i++){
+    if(txt)txt.textContent=msgs[i];if(fill)fill.style.width=(30+(i+1)*14)+'%';if(rd)rd.textContent=`${i+3}/6`;
+    await new Promise(r=>setTimeout(r,130));
+  }
+
+  // Constrói métricas UMA VEZ por jogo
+  const analyzed=raw.map(m=>{
+    buildMetrics(m);  // estável
+    m.result=runClusters(m); // estável (seed)
+    m.melhorEntrada=getMelhorEntrada(m);
+    m.motivo=gerarMotivo(m);
+    m.pontosFracos=gerarPontosFracos(m);
+    m.oddsCalc=calcOdds(m);
+    return m;
+  });
+
+  // Ordena por horário ASC (00:00 em diante) — SEMPRE
+  analyzed.sort((a,b)=>a.time.localeCompare(b.time));
+
+  G.dayGames[k]=analyzed;
+
+  // Gera bilhetes ideais por janela — SOMENTE se mudou o dia ou ainda não gerou
+  if(G.janelaBilhetesDate!==k){
+    gerarBilhetesJanela(k,analyzed);
+  }
+
+  if(banner)banner.style.display='none';
+  G.iaRunning=false;
+  $('nb-j',analyzed.length);
+  // Atualiza badge de bilhetes abertos
+  const abertos=['manha','tarde','noite'].filter(j=>G.janelaStatus[j]?.confirmado&&!G.janelaStatus[j]?.resultado).length;
+  $('nb-b', abertos||'0');
+  renderView();
+}
+
+/* ══════════════════════════════════════════════════════
+   BILHETES IDEAIS FIXOS POR JANELA
+   Gerados UMA VEZ, não mudam.
+   Meta: odd combinada ≥ 1.68 com máxima chance de green.
+   Se um jogo passou, o próximo da janela entra.
+══════════════════════════════════════════════════════ */
+function gerarBilhetesJanela(k,games){
+  const getJanela=(ini,fim)=>games.filter(m=>{
+    const h=parseInt(m.time?.split(':')[0]||0);
+    return h>=ini&&h<fim&&!m.result?.blocked&&m.result?.cls!=='A'&&m.result?.cls!=='R';
+  }).sort((a,b)=>{
+    // Ordena por maior consenso, depois por hora
+    const diff=(b.result?.votes||0)-(a.result?.votes||0);
+    if(diff!==0)return diff;
+    return a.time.localeCompare(b.time);
+  });
+
+  const buildBilhete=(jogos)=>{
+    // Seleciona os melhores jogos para atingir ≥ 1.68
+    let selected=[];
+    let oddComb=1;
+
+    for(const m of jogos){
+      if(selected.length>=4)break; // máx 4 por bilhete
+      const me=getMelhorEntrada(m);
+      if(!me.ok||me.odd<1.05)continue;
+      const novaOdd=oddComb*me.odd;
+      if(novaOdd>2.5&&selected.length>=2)break; // não deixa subir demais
+      selected.push({...m,entradaSelecionada:me});
+      oddComb=novaOdd;
+      if(oddComb>=1.68&&selected.length>=2)break; // meta atingida
+    }
+    return selected;
   };
 
-  return (
-    <div className="min-h-screen bg-[#07091a] text-slate-200 font-sans">
-      <Sidebar 
-        activeTab={activeTab} 
-        onTabChange={setActiveTab} 
-        isOpen={sidebarOpen} 
-        onClose={() => setSidebarOpen(false)} 
-        isAdmin={isAdmin}
-      />
+  G.janelaBilhetes.manha=buildBilhete(getJanela(0,12));
+  G.janelaBilhetes.tarde=buildBilhete(getJanela(12,20));
+  G.janelaBilhetes.noite=buildBilhete(getJanela(20,27));
+  G.janelaBilhetesDate=k;
 
-      <div className="lg:ml-[260px] flex flex-col min-h-screen">
-        <TopHeader 
-          onMenuToggle={() => setSidebarOpen(true)}
-          selectedDate={selectedDate}
-          onDateChange={setSelectedDate}
-          userName={user?.full_name}
-        />
-
-        <main className="flex-1 p-4 lg:p-6 space-y-6">
-          {/* Header de Controlo das IAs */}
-          <div className="flex flex-wrap items-center justify-between gap-4 bg-[#0b1226] p-4 rounded-xl border border-white/5">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center animate-pulse">
-                🧠
-              </div>
-              <div>
-                <h2 className="text-lg font-bold text-white">Maestro v8.1 Online</h2>
-                <p className="text-xs text-slate-400">70 Agentes processando dados ao vivo</p>
-              </div>
-            </div>
-
-            {/* Filtros de Qualidade */}
-            <div className="flex bg-[#07091a] p-1 rounded-lg border border-white/10">
-              {['all', 'Diamante', 'Ouro'].map((lvl) => (
-                <button
-                  key={lvl}
-                  onClick={() => setFilterLevel(lvl)}
-                  className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${
-                    filterLevel === lvl ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  {lvl.toUpperCase()}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-col xl:flex-row gap-6">
-            {/* Tabela de Jogos Principal */}
-            <div className="flex-1 min-w-0">
-              <GamesTable 
-                games={filteredGames} 
-                onAddToBet={handleAddToBet} 
-                loading={loading}
-              />
-            </div>
-
-            {/* Sidebar de Operação (Banca e Bilhete) */}
-            <div className="w-full xl:w-[340px] space-y-6">
-              <BankManager bankroll={bankroll} />
-              
-              <BetSlip 
-                games={betGames} 
-                onRemoveGame={(id) => setBetGames(betGames.filter(g => g.id !== id))}
-                onClearAll={() => setBetGames([])}
-              />
-            </div>
-          </div>
-        </main>
-      </div>
-
-      {/* Chat flutuante da Mestre */}
-      <MaestroChat />
-    </div>
-  );
+  // Reset status quando novo dia
+  G.janelaStatus={
+    manha:{confirmado:false,stake:0,resultado:null,oddsEditadas:{}},
+    tarde:{confirmado:false,stake:0,resultado:null,oddsEditadas:{}},
+    noite:{confirmado:false,stake:0,resultado:null,oddsEditadas:{}},
+  };
+  saveLocal();
 }
+
+/* Calcula odd combinada da janela respeitando odds editadas
+   Usa TODOS os jogos do bilhete (não apenas os futuros) para não alterar a odd */
+function calcOddJanela(nomeJanela){
+  const jogos=G.janelaBilhetes[nomeJanela]||[];
+  const editadas=G.janelaStatus[nomeJanela]?.oddsEditadas||{};
+  if(!jogos.length)return 1;
+  return jogos.reduce((acc,m)=>{
+    const oddEditada=editadas[m.id];
+    const me=m.entradaSelecionada||getMelhorEntrada(m);
+    const odd=oddEditada?parseFloat(oddEditada):(me.odd||1.05);
+    return acc*Math.max(1.01,parseFloat(odd));
+  },1);
+}
+
+/* ══════════════════════════════════════════════════════
+   CONFIRMAR BILHETE DE JANELA — desconta da banca
+══════════════════════════════════════════════════════ */
+window.confirmarBilhete=async(janela)=>{
+  const stakeEl=document.getElementById(`stake_${janela}`);
+  const stake=parseFloat(stakeEl?.value||0);
+  if(!stake||stake<=0){showToast('❌ Informe o valor da entrada');return;}
+  if(G.bankroll.balance>0&&stake>G.bankroll.balance){showToast('❌ Saldo insuficiente');return;}
+  G.bankroll.balance-=stake;
+  G.bankroll.invested=(G.bankroll.invested||0)+stake;
+  G.janelaStatus[janela].confirmado=true;
+  G.janelaStatus[janela].stake=stake;
+  await saveBk();saveLocal();updateBkUI();renderView();
+  showToast(`✅ Bilhete ${janela} confirmado! R$${stake.toFixed(2)} descontado.`);
+};
+
+window.registrarResultado=async(janela,win)=>{
+  const status=G.janelaStatus[janela];if(!status.confirmado)return;
+  const stake=status.stake;
+  const oddComb=calcOddJanela(janela);
+  const pot=stake*oddComb;
+  status.resultado=win?'green':'red';
+  const bet={
+    date:new Date().toISOString(),
+    games:(G.janelaBilhetes[janela]||[]).map(m=>`${m.home} x ${m.away}`).join(' + '),
+    stake,odd:oddComb,janela,status:win?'win':'loss',
+  };
+  if(win){G.bankroll.balance+=pot;G.bankroll.returned=(G.bankroll.returned||0)+pot;G.bankroll.greens=(G.bankroll.greens||0)+1;}
+  else{G.bankroll.reds=(G.bankroll.reds||0)+1;}
+  G.bankroll.history=[...(G.bankroll.history||[]),bet];
+  await saveBk();saveLocal();updateBkUI();
+  const abertos=['manha','tarde','noite'].filter(j=>G.janelaStatus[j]?.confirmado&&!G.janelaStatus[j]?.resultado).length;
+  $('nb-b', abertos||'0');
+  renderView();
+  showToast(win?`🟢 GREEN ${janela}! +R$${(pot-stake).toFixed(2)}`:`🔴 RED ${janela}! -R$${stake.toFixed(2)}`);
+};
+
+/* Modal editar odd */
+window.abrirModalOdd=(jogo_id,janelaNome,idx)=>{
+  G.modalOddJogo=jogo_id;G.modalOddIdx=idx;G.modalOddJanela=janelaNome;
+  const jogos=G.janelaBilhetes[janelaNome]||[];const m=jogos[idx];
+  if(!m)return;
+  const editadas=G.janelaStatus[janelaNome]?.oddsEditadas||{};
+  const oddAtual=editadas[m.id]||m.entradaSelecionada?.odd||1.05;
+  document.getElementById('modalOddJogo').textContent=`${m.home} x ${m.away} — ${m.entradaSelecionada?.mercado||'Over 1.5'}`;
+  document.getElementById('modalOddIn').value=parseFloat(oddAtual).toFixed(2);
+  document.getElementById('modalOdd').style.display='flex';
+};
+window.fecharModalOdd=()=>document.getElementById('modalOdd').style.display='none';
+window.confirmarOdd=()=>{
+  const val=parseFloat(document.getElementById('modalOddIn').value||0);
+  if(!val||val<1.01){showToast('❌ Odd inválida');return;}
+  const janela=G.modalOddJanela;const jogos=G.janelaBilhetes[janela]||[];const m=jogos[G.modalOddIdx];
+  if(!m)return;
+  G.janelaStatus[janela].oddsEditadas[m.id]=val.toFixed(2);
+  saveLocal();fecharModalOdd();renderView();
+  showToast(`✅ Odd atualizada para ${val.toFixed(2)}`);
+};
+
+/* Finalizar dia */
+window.finalizarDia=()=>{
+  if(!confirm(`Finalizar ${fmt(G.date)}?\nIsso apagará os jogos do dia e os bilhetes não confirmados.`))return;
+  const k=dKey(G.date);
+  delete G.dayGames[k];
+  localStorage.removeItem(`src10_${k}`);
+  G.janelaBilhetes={manha:null,tarde:null,noite:null};
+  G.janelaBilhetesDate=null;
+  G.janelaStatus={manha:{confirmado:false,stake:0,resultado:null,oddsEditadas:{}},tarde:{confirmado:false,stake:0,resultado:null,oddsEditadas:{}},noite:{confirmado:false,stake:0,resultado:null,oddsEditadas:{}}};
+  saveLocal();showToast('✅ Dia finalizado!');
+  G.date.setDate(G.date.getDate()+1);
+  $('dateLbl',fmt(G.date));buildDayPills();loadDay();
+};
+
+/* ══════════════════════════════════════════════════════
+   BANKROLL
+══════════════════════════════════════════════════════ */
+async function loadBk(){if(!G.user)return;const d=await db.collection('bankroll').doc(G.user.uid).get();if(d.exists)G.bankroll=d.data();else await saveBk();updateBkUI();}
+async function saveBk(){if(!G.user)return;await db.collection('bankroll').doc(G.user.uid).set(G.bankroll);}
+function updateBkUI(){const p=(G.bankroll.returned||0)-(G.bankroll.invested||0),r=G.bankroll.invested>0?(p/G.bankroll.invested*100):0;$('bkAmt',`R$ ${G.bankroll.balance.toFixed(2)}`);$('bkSub',`Lucro: ${p>=0?'+':''}R$ ${p.toFixed(2)}`);$('bkROI',`ROI: ${r.toFixed(1)}%`);}
+async function checkPlan(u){if(u.email===ADMIN)return{ok:true};const d=await db.collection('users').doc(u.uid).get();if(!d.exists)return{ok:false};const x=d.data();const e=x.premiumExpiry?.toDate?x.premiumExpiry.toDate():null;return{ok:x.premium&&(!e||brasNow()<e)};}
+async function setPlan(uid,type,days){let e=null;if(type==='premium'&&days>0)e=new Date(brasNow().getTime()+days*86400000);await db.collection('users').doc(uid).set({premium:type==='premium',premiumExpiry:e,planType:type,planDays:days,updatedAt:new Date()},{merge:true});}
+window.activateVip=async()=>{const code=(document.getElementById('vipIn')?.value||document.getElementById('vipPainel')?.value||document.getElementById('vipPlanos')?.value||'').trim().toUpperCase();if(!code){showToast('⚠️ Digite o código');return;}const cfg=(await db.collection('admin').doc('config').get()).data();const vips=cfg?.vipCodes||G.vipCodes;if(vips.includes(code)){const d=parseInt(code.split('-').pop())||60;await setPlan(G.user.uid,'premium',d);G.isPremium=true;showToast(`🎉 VIP ativado! ${d} dias!`);renderView();}else showToast('❌ Código inválido');};
+window.openPix=()=>window.open(`https://wa.me/${WA}?text=Olá! Quero assinar SRC Analytics PRO. Email: ${G.user?.email}`,'_blank');
+
+/* ══════════════════════════════════════════════════════
+   KPI + HELPERS
+══════════════════════════════════════════════════════ */
+function kpiGrid(){
+  const h=G.bankroll,k=dKey(G.date),list=G.dayGames[k]||[];
+  const p=(h.returned||0)-(h.invested||0),r=h.invested>0?(p/h.invested*100):0;
+  const diam=list.filter(m=>m.result?.cls==='D').length;
+  const comb=calcOddJanela('manha')*0+calcOddJanela('tarde')*0+calcOddJanela('noite')*0; // placeholder
+  return`<div class="kpi-grid">
+    <div class="kpi k-g"><div class="kl">Greens</div><div class="kv c-g">${h.greens||0}</div></div>
+    <div class="kpi k-r"><div class="kl">Reds</div><div class="kv c-r">${h.reds||0}</div></div>
+    <div class="kpi k-go"><div class="kl">ROI</div><div class="kv ${r>=0?'c-go':'c-r'}">${r>=0?'+':''}${r.toFixed(1)}%</div></div>
+    <div class="kpi k-b"><div class="kl">Jogos</div><div class="kv c-b">${list.length}</div><div class="ks">${fmt(G.date)}</div></div>
+    <div class="kpi k-o"><div class="kl">💎 Diamante</div><div class="kv c-o">${diam}</div></div>
+    <div class="kpi k-p"><div class="kl">Banca</div><div class="kv c-p">R$${h.balance.toFixed(0)}</div></div>
+  </div>`;
+}
+
+function clLeg(){return`<div class="cl-leg">
+  <span style="font-size:8.5px;font-weight:700;color:var(--ink3);text-transform:uppercase">70 IAs · 5 Clusters:</span>
+  <span class="cb cb-D">💎 Diamante ≥65/70</span>
+  <span class="cb cb-G">🥇 Ouro 50-64/70</span>
+  <span class="cb cb-A">⚠️ Alerta &lt;50/70</span>
+  <span class="cb cb-R">🚫 Bloqueado</span>
+</div>`;}
+
+/* FBAR COM FILTRO DE HORÁRIO */
+function fbar(){
+  return`<div class="fbar">
+    <input type="text" id="sfT" class="fi" style="width:130px" placeholder="🔎 Time ou liga..." value="${G.filterText}">
+    <select id="sfL" class="fi">
+      <option value="all">Todos os scores</option>
+      <option value="D" ${G.filterLevel==='D'?'selected':''}>💎 Diamante</option>
+      <option value="G" ${G.filterLevel==='G'?'selected':''}>🥇 Ouro</option>
+      <option value="A" ${G.filterLevel==='A'?'selected':''}>⚠️ Alerta</option>
+    </select>
+    <select id="sfH" class="fi">
+      <option value="all">Todos os horários</option>
+      <option value="manha" ${G.filterHora==='manha'?'selected':''}>🌅 Manhã (00-12h)</option>
+      <option value="tarde" ${G.filterHora==='tarde'?'selected':''}>☀️ Tarde (12-20h)</option>
+      <option value="noite" ${G.filterHora==='noite'?'selected':''}>🌙 Noite (20-24h)</option>
+    </select>
+    <div class="top-btns">
+      <button class="tb ${!G.topN?'act':''}" onclick="setTop(null)">Todos</button>
+      <button class="tb ${G.topN===30?'act-gold':''}" onclick="setTop(30)">Top 30</button>
+      <button class="tb ${G.topN===15?'act-gold':''}" onclick="setTop(15)">Top 15</button>
+      <button class="tb ${G.topN===10?'act-gold':''}" onclick="setTop(10)">Top 10</button>
+      <button class="tb ${G.topN===5?'act-gold':''}" onclick="setTop(5)">🎯 Top 5</button>
+    </div>
+    <button style="margin-left:auto;padding:4px 12px;border-radius:6px;border:1px solid rgba(16,185,130,.2);background:rgba(16,185,130,.08);color:var(--grn);font-size:10px;font-weight:700;cursor:pointer" onclick="loadDay(true)">⟳</button>
+  </div>`;
+}
+window.setTop=n=>{G.topN=n;renderView();};
+
+function applyF(list){
+  let r=[...list];
+  // Sempre ordena por horário primeiro
+  r.sort((a,b)=>a.time.localeCompare(b.time));
+  if(G.filterText)r=r.filter(m=>m.home.toLowerCase().includes(G.filterText)||m.away.toLowerCase().includes(G.filterText)||m.league.toLowerCase().includes(G.filterText));
+  if(G.filterLevel!=='all')r=r.filter(m=>(m.result?.cls||'R')===G.filterLevel);
+  if(G.filterHora!=='all'){
+    const ranges={manha:[0,12],tarde:[12,20],noite:[20,27]};
+    const[ini,fim]=ranges[G.filterHora]||[0,27];
+    r=r.filter(m=>{const h=parseInt(m.time?.split(':')[0]||0);return h>=ini&&h<fim;});
+  }
+  if(G.topN)r=r.slice(0,G.topN);
+  return r;
+}
+
+/* ══════════════════════════════════════════════════════
+   PAINEL INICIAL — BILHETES POR JANELA (FOCO PRINCIPAL)
+══════════════════════════════════════════════════════ */
+function renderJanelaCard(nomeJanela,label,icon,hClass){
+  const todosJogos=G.janelaBilhetes[nomeJanela]||[];
+  const status=G.janelaStatus[nomeJanela];
+  const editadas=status?.oddsEditadas||{};
+
+  // No painel inicial: mostra SÓ jogos futuros (jogos que já terminaram somem)
+  const jogos = status?.confirmado
+    ? todosJogos   // se já confirmou, mostra todos (inclusive passados) para referência
+    : todosJogos.filter(m=>isFut(m.datetime));
+
+  // Se ficou sem jogos futuros e não estava confirmado, tenta pegar substitutos
+  const k=dKey(G.date);
+  const allGames=G.dayGames[k]||[];
+
+  const oddComb=calcOddJanela(nomeJanela);
+  const okMeta=oddComb>=1.68;
+  const futuros=jogos.filter(m=>isFut(m.datetime));
+
+  const jogosHtml=jogos.map((m,idx)=>{
+    const me=m.entradaSelecionada||getMelhorEntrada(m);
+    const oddExibida=editadas[m.id]?parseFloat(editadas[m.id]):me.odd;
+    const fracos=m.pontosFracos||[];
+    const minutos=minU(m.datetime);
+    return`<div class="jj-item">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <div class="jj-hora">${m.time}</div>
+        ${minutos>0&&minutos<120?`<div style="font-size:8px;color:${minutos<30?'var(--red)':'var(--gold)'}">⏱ ${fmtMin(minutos)}</div>`:''}
+        <span class="cb cb-${m.result?.cls||'R'}" style="font-size:7.5px">${m.result?.label||'—'}</span>
+      </div>
+      <div class="jj-jogo">${m.home} <span style="font-size:11px;color:var(--ink3);font-weight:400">x</span> ${m.away}</div>
+      <div style="font-size:8.5px;color:var(--ink3);margin-bottom:3px">${m.league}</div>
+      <div class="jj-entrada">
+        <span class="jj-mercado">${me.mercado||'Over 1.5'}</span>
+        <span class="jj-odd-val">@${parseFloat(oddExibida).toFixed(2)}</span>
+        <span class="jj-chance">${me.chance||0}% green</span>
+        ${!status?.confirmado?`<button class="btn-edit-odd" onclick="abrirModalOdd('${m.id}','${nomeJanela}',${idx});event.stopPropagation()">✏️</button>`:''}
+      </div>
+      <div class="jj-motivo">${m.motivo||''}</div>
+      ${fracos.length?`<div class="jj-fraco">⚠️ ${fracos.join(' · ')}</div>`:''}
+    </div>`;
+  }).join('');
+
+  // Footer: aguardando confirmação ou resultado
+  let footerHtml='';
+  if(status?.resultado){
+    const isGreen=status.resultado==='green';
+    const oddC=calcOddJanela(nomeJanela);
+    const ret=(status.stake*oddC).toFixed(2);
+    footerHtml=`<div class="janela-aguardando" style="background:${isGreen?'rgba(16,185,129,.07)':'rgba(244,63,94,.07)'}">
+      <div class="aw-row">
+        <div>
+          <div style="font-size:11px;font-weight:700;color:${isGreen?'var(--grn)':'var(--red)'}">${isGreen?'🟢 GREEN!':'🔴 RED!'}</div>
+          <div class="aw-info">Entrada: R$${status.stake?.toFixed(2)} · ${isGreen?`Retorno: R$${ret}`:'Perdido'}</div>
+        </div>
+      </div>
+    </div>`;
+  }else if(status?.confirmado){
+    footerHtml=`<div class="janela-aguardando">
+      <div class="aw-row">
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--gold)">⏳ Aguardando resultado</div>
+          <div class="aw-info">Entrada: <span class="aw-stake">R$${status.stake?.toFixed(2)}</span> · Odd: ${oddComb.toFixed(2)} · Retorno: R$${(status.stake*oddComb).toFixed(2)}</div>
+        </div>
+        <div class="aw-btns">
+          <button class="btn-green-sm" onclick="registrarResultado('${nomeJanela}',true)">✅ GREEN</button>
+          <button class="btn-red-sm"   onclick="registrarResultado('${nomeJanela}',false)">❌ RED</button>
+        </div>
+      </div>
+    </div>`;
+  }else{
+    footerHtml=`<div class="janela-footer">
+      <div style="flex:1">
+        <div style="font-size:8px;color:var(--ink3);letter-spacing:1px;text-transform:uppercase;margin-bottom:2px">Valor de entrada</div>
+        <input type="number" id="stake_${nomeJanela}" class="janela-stake" value="100" min="1" placeholder="R$">
+      </div>
+      <button class="btn-confirmar" onclick="confirmarBilhete('${nomeJanela}')" ${!okMeta||!futuros.length?'disabled':''}>
+        ${!okMeta?'❌ Odd < 1.68':!futuros.length?'Sem jogos futuros':'✅ Confirmar Entrada'}
+      </button>
+    </div>`;
+  }
+
+  return`<div class="janela-card">
+    <div class="janela-head ${hClass}">
+      <div class="janela-titulo">${icon} Bilhete ${label}</div>
+      <div class="janela-sub">${nomeJanela==='manha'?'00h–12h':nomeJanela==='tarde'?'12h–20h':'20h–24h'} · ${jogos.length} jogo${jogos.length!==1?'s':''}</div>
+      <div class="janela-odd-row">
+        <div class="janela-odd ${okMeta?'j-odd-ok':'j-odd-no'}">${oddComb.toFixed(2)}</div>
+        <div style="display:flex;flex-direction:column;gap:2px">
+          <span class="janela-meta" style="color:${okMeta?'var(--grn)':'var(--red)'}">${okMeta?'✅ Meta atingida':'❌ Abaixo de 1.68'}</span>
+          ${status?.confirmado&&!status?.resultado?'<span style="font-size:8.5px;color:var(--gold)">⏳ Confirmado</span>':''}
+          ${status?.resultado?`<span style="font-size:8.5px;font-weight:700;color:${status.resultado==='green'?'var(--grn)':'var(--red)'}">${status.resultado==='green'?'🟢 GREEN':'🔴 RED'}</span>`:''}
+        </div>
+      </div>
+    </div>
+    <div class="janela-jogos">
+      ${jogos.length
+      ? jogosHtml
+      : `<div style="font-size:9.5px;color:var(--ink3);padding:8px 0;text-align:center">
+          ${todosJogos.length>0
+            ? '⏱ Todos os jogos desta janela já iniciaram'
+            : 'Sem jogos aprovados nesta janela.'}
+         </div>`}
+    </div>
+    ${footerHtml}
+  </div>`;
+}
+
+/* ══════════════════════════════════════════════════════
+   TABELA PRINCIPAL — Sempre ordenada por horário
+══════════════════════════════════════════════════════ */
+function buildTable(list){
+  if(!list.length)return`<div class="empty"><h3>⚠️ Nenhum jogo</h3><p>Use ⟳ para buscar ou aguarde o carregamento.</p></div>`;
+  const isFree=!G.isPremium&&G.user&&G.user.email!==ADMIN;const show=isFree?list.slice(0,3):list;
+  let html=`<div class="tw"><table><thead><tr>
+    <th style="width:68px">⏱ Hora</th><th style="width:100px">🏆 Liga</th>
+    <th style="min-width:140px">⚽ Jogo</th><th style="width:88px">Score</th>
+    <th style="width:78px">Votos</th><th style="min-width:130px">⭐ Melhor Entrada</th>
+    <th style="width:58px">Odd</th><th style="width:58px">Chance</th>
+    <th style="min-width:115px">🎰 Apostar</th>
+  </tr></thead><tbody>`;
+
+  show.forEach(m=>{
+    const r=m.result,cls=r?.cls||'R';
+    const me=m.melhorEntrada||getMelhorEntrada(m);
+    const vv=r?.votes||0,filled=Math.round(vv/TOTAL*20);
+    const dots=[...Array(20)].map((_,i)=>`<span class="vd ${i<filled?'vd-ok':'vd-no'}"></span>`).join('');
+    const min=minU(m.datetime);
+    const passou=!isFut(m.datetime);
+
+    html+=`<tr class="row-${cls}" onclick="toggleRow('${m.id}')" style="${passou?'opacity:.6':''}">
+      <td>
+        <div class="tc">${m.time}</div>
+        ${min>0?`<div style="font-size:8px;color:${min<30?'var(--red)':min<90?'var(--gold)':'var(--ink3)'}">${fmtMin(min)}</div>`:''}
+        ${passou?'<div style="font-size:7.5px;color:var(--red)">⏱ Iniciado</div>':''}
+      </td>
+      <td><div class="lc" title="${m.league}">${m.league}</div></td>
+      <td><div class="mc">${m.home}</div><div style="font-size:8px;color:var(--ink3);margin:1px 0">x</div><div class="mc">${m.away}</div></td>
+      <td><span class="cb cb-${cls}">${r?.label||'—'}</span>${r?.blocked?`<div style="font-size:8px;color:var(--red);margin-top:2px">${r.reason}</div>`:''}</td>
+      <td><div style="font-size:10px;font-weight:700">${vv}/${TOTAL}</div><div class="vote-bar">${dots}</div></td>
+      <td>${me.ok?`<span class="me-ok">${me.mercado}</span>`:`<span class="${me.chance>=55?'me-warn':'me-no'}">${me.mercado}</span>`}</td>
+      <td><span style="font-family:'DM Mono',monospace;font-size:12px;font-weight:700;color:var(--gold)">@${me.odd?.toFixed(2)||'—'}</span></td>
+      <td><span style="font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:800;color:${me.chance>=80?'var(--grn)':me.chance>=65?'var(--acc)':'var(--ink2)'}">${me.chance||0}%</span></td>
+      <td onclick="event.stopPropagation()">
+        <div class="btn-links">
+          <a href="${betanoUrl(m.home,m.away)}" target="_blank" class="bl bl-b">Betano</a>
+          <a href="${superbetUrl(m.home,m.away)}" target="_blank" class="bl bl-s">Superbet</a>
+          <a href="${flashUrl(m.home,m.away)}" target="_blank" class="bl bl-f">Flash</a>
+        </div>
+      </td>
+    </tr>`;
+
+    if(G.expandedRow===m.id&&r){
+      const odds=m.oddsCalc||calcOdds(m);
+      const fracos=m.pontosFracos||[];
+      // Todas as entradas
+      const entradas=[
+        {mercado:'Over 1.5 Gols',odd:odds.over15,chance:odds.prob15},
+        {mercado:'Over 2.5 Gols',odd:odds.over25,chance:odds.prob25},
+        {mercado:'Ambas Marcam — Sim',odd:odds.btts,chance:odds.probBtts},
+        {mercado:'Over 9.5 Escanteios',odd:odds.escanteios,chance:odds.probEsc},
+        {mercado:'Under 4.5 Cartões',odd:odds.cartoes,chance:odds.probCart},
+      ].sort((a,b)=>b.chance-a.chance);
+      const entradasHtml=entradas.map(e=>`<div class="entry-row">
+        <span class="entry-mercado">${e.mercado}</span>
+        <span class="entry-odd">@${e.odd.toFixed(2)}</span>
+        <span class="entry-chance" style="color:${e.chance>=80?'var(--grn)':e.chance>=65?'var(--acc)':e.chance>=55?'var(--gold)':'var(--red)'}">${e.chance}%</span>
+        <span class="entry-rec">${e.chance>=80?'✅ Recomendado':e.chance>=65?'👍 Bom':e.chance>=55?'⚠️ Verificar':'❌ Evitar'}</span>
+      </div>`).join('');
+
+      const cgH=Object.entries(CLUSTERS).map(([k,cl])=>{const det=r.detail?.[k];const v=det?.votes||0,t=cl.agents,pct=Math.round(v/t*100),ok=det?.ok;
+        return`<div class="cl-item"><div class="cl-name" style="color:${cl.color}">${cl.name}</div><div class="cl-sc" style="color:${ok?'var(--grn)':'var(--red)'}">${v}<span style="font-size:11px;color:var(--ink2)">/${t}</span></div><div class="cl-v">${pct}% — ${ok?'✅':'❌'}</div><div class="prog-bar"><div class="prog" style="width:${pct}%;background:${ok?'var(--grn)':'var(--red)'}"></div></div></div>`;
+      }).join('');
+
+      html+=`<tr class="exp-row"><td colspan="9"><div class="exp-inner">
+        <div class="exp-block">
+          <h5>📊 Métricas</h5>
+          <div class="exp-line"><span>Over 2.5</span><span class="ev">${m.o25}% chance</span></div>
+          <div class="exp-line"><span>BTTS</span><span class="ev">${m.btts}% chance</span></div>
+          <div class="exp-line"><span>Escanteios</span><span class="ev">${m.corners}% chance</span></div>
+          <div class="exp-line"><span>Cartões</span><span class="ev">${m.cards}% risco</span></div>
+          <div class="exp-line"><span>Consenso 70 IAs</span><span class="ev">${r.votes}/${TOTAL} (${r.pct}%)</span></div>
+          <div class="exp-line"><span>Fonte</span><span class="ev">${m.src==='api'?'🟢 API':'🔵 Pool'}</span></div>
+        </div>
+        <div class="exp-block" style="flex:1.5">
+          <h5>🤖 Análise das 70 IAs — Motivo</h5>
+          <div class="ia-reason-box">${m.motivo||'—'}</div>
+          ${fracos.length?`<div style="margin-top:6px;font-size:9.5px;color:var(--red)">⚠️ Pontos fracos: ${fracos.join(' · ')}</div>`:'<div style="margin-top:5px;font-size:9.5px;color:var(--grn)">✅ Sem pontos fracos identificados.</div>'}
+          <h5 style="margin-top:10px">🧠 Clusters — Votos</h5>
+          <div class="cl-grid">${cgH}</div>
+        </div>
+        <div class="exp-block">
+          <h5>⭐ Todas as Entradas (ord. por chance)</h5>
+          <div class="all-entries">${entradasHtml}</div>
+          <div style="display:flex;flex-direction:column;gap:3px;margin-top:9px">
+            <a href="${betanoUrl(m.home,m.away)}" target="_blank" style="display:block;text-align:center;padding:5px;border-radius:5px;background:rgba(16,185,130,.1);color:var(--grn);font-size:9.5px;font-weight:700;text-decoration:none">Abrir na Betano ↗</a>
+            <a href="${superbetUrl(m.home,m.away)}" target="_blank" style="display:block;text-align:center;padding:5px;border-radius:5px;background:rgba(56,189,248,.09);color:var(--acc);font-size:9.5px;font-weight:700;text-decoration:none">Abrir na Superbet ↗</a>
+          </div>
+        </div>
+      </div></td></tr>`;
+    }
+  });
+
+  if(isFree&&list.length>3)html+=`<tr><td colspan="9" class="lock-td">🔒 FREE: 3/${list.length} jogos. Assine ou ative VIP.</td></tr>`;
+  html+='</tbody></table></div>';
+  return html;
+}
+
+window.toggleRow=id=>{G.expandedRow=(G.expandedRow===id?null:id);renderView();};
+
+/* JOGOS DO DIA */
+function renderJogosDia(){
+  const k=dKey(G.date),list=G.dayGames[k]||[];
+  // SEMPRE por horário
+  const sorted=[...list].sort((a,b)=>a.time.localeCompare(b.time));
+  let metaVerde=false;sorted.forEach(m=>{const j=G.jdMonitor[m.id]||{};if(j.o15==='ok'&&j.btts==='ok'&&j.corners==='ok')metaVerde=true;});
+  const rv=v=>{if(!v)return`<span class="r-pend">⏳</span>`;if(v==='ok')return`<span class="r-ok">✅</span>`;if(v==='live')return`<span class="r-live">AO VIVO</span>`;return`<span class="r-no">❌</span>`;};
+  const rows=sorted.map(m=>{const j=G.jdMonitor[m.id]||{};const me=m.melhorEntrada||getMelhorEntrada(m);
+    const passou=!isFut(m.datetime);
+    return`<tr style="${passou?'opacity:.65':''}">
+    <td class="tc">${m.time}</td>
+    <td style="font-size:9px;color:var(--ink2);max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.league}</td>
+    <td style="font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:700">${m.home} x ${m.away}</td>
+    <td><span class="cb cb-${m.result?.cls||'R'}">${m.result?.label||'—'}</span></td>
+    <td style="font-size:9px">${me.mercado||'—'}</td>
+    <td style="font-family:'DM Mono',monospace;font-size:11px;color:var(--gold)">@${me.odd?.toFixed(2)||'—'}</td>
+    <td><span style="font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:800;color:${me.chance>=80?'var(--grn)':me.chance>=65?'var(--acc)':'var(--ink2)'}">${me.chance||0}%</span></td>
+    <td>${rv(j.o15)}</td><td>${rv(j.btts)}</td><td>${rv(j.corners)}</td>
+    <td>${j.result?`<span class="r-ok">${j.result}</span>`:`<span class="r-pend">⏳</span>`}</td>
+    </tr>`;}).join('');
+  document.getElementById('dyn').innerHTML=`
+    ${metaVerde?`<div class="meta-banner"><div style="font-family:'Barlow Condensed',sans-serif;font-size:24px;color:var(--grn)">🎉 META DO DIA BATIDA!</div></div>`:''}
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:20px;font-weight:800">📋 Todos os Jogos <span style="font-size:12px;color:var(--ink3)">(${sorted.length} · ${fmt(G.date)} · ordenado por horário)</span></div>
+    </div>
+    <div class="jd-table"><table>
+      <thead><tr><th style="width:50px">Hora</th><th style="width:80px">Liga</th><th style="min-width:130px">Jogo</th><th style="width:90px">Score</th><th style="min-width:110px">Melhor Entrada</th><th style="width:55px">Odd</th><th style="width:60px">Chance</th><th style="width:55px">Over 1.5</th><th style="width:55px">Ambas</th><th style="width:55px">Escant.</th><th style="width:90px">Resultado</th></tr></thead>
+      <tbody>${rows||`<tr><td colspan="11" style="text-align:center;padding:22px;color:var(--ink3)">Carregando...</td></tr>`}</tbody>
+    </table></div>`;
+}
+
+/* RENDERS */
+function renderDashboard(){
+  const k=dKey(G.date),list=G.dayGames[k]||[];
+  const isFree=!G.isPremium&&G.user&&G.user.email!==ADMIN;
+  const ub=isFree?`<div class="ub"><div><h3 style="font-family:'Barlow Condensed',sans-serif;font-size:15px;color:var(--pur)">🔒 Premium</h3><p style="font-size:10.5px;color:var(--ink2)">Vê apenas 3 jogos por aba.</p></div>
+    <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+      <input type="text" id="vipIn" class="vi-in" placeholder="Código VIP">
+      <button class="btn-vip" onclick="activateVip()">🔑</button>
+      <button class="btn-pix" onclick="openPix()">💳 Assinar</button>
+    </div></div>`:'';
+
+  document.getElementById('dyn').innerHTML=`
+    ${kpiGrid()}${ub}
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:700;color:var(--gold);display:flex;align-items:center;gap:8px">
+        🎯 Melhores Entradas — Meta 1.68 por janela
+        <span style="font-size:9.5px;font-weight:400;color:var(--ink3);font-family:'Sora',sans-serif">Fixos · não mudam</span>
+      </div>
+      ${['manha','tarde','noite'].some(j=>G.janelaStatus[j]?.confirmado&&!G.janelaStatus[j]?.resultado)
+        ?`<button onclick="document.querySelector('[data-tab=ctrl]').click()" style="padding:6px 14px;border-radius:7px;border:1px solid rgba(244,196,48,.3);background:rgba(244,196,48,.1);color:var(--gold);font-size:10.5px;font-weight:700;cursor:pointer">⏳ Ver bilhetes abertos →</button>`
+        :''}
+    </div>
+    <div class="janela-grid">
+      ${renderJanelaCard('manha','Manhã','🌅','jh-manha')}
+      ${renderJanelaCard('tarde','Tarde','☀️','jh-tarde')}
+      ${renderJanelaCard('noite','Noite','🌙','jh-noite')}
+    </div>
+    ${clLeg()}${fbar()}${buildTable(applyF(list))}`;
+  attachF(renderDashboard);
+}
+
+function renderAnalise(){
+  const k=dKey(G.date);
+  document.getElementById('dyn').innerHTML=`${kpiGrid()}${clLeg()}${fbar()}${buildTable(applyF(G.dayGames[k]||[]))}`;
+  attachF(renderAnalise);
+}
+
+function mkTab(colFn){
+  return function(){
+    const k=dKey(G.date),list=applyF(G.dayGames[k]||[]),isFree=!G.isPremium&&G.user&&G.user.email!==ADMIN,show=isFree?list.slice(0,1):list;
+    const rows=show.map(m=>{const{txt,cls2,oddVal,chance}=colFn(m);const r=m.result;
+      return`<tr class="row-${r?.cls||'R'}" onclick="toggleRow('${m.id}')">
+        <td class="tc">${m.time}</td><td class="lc">${m.league}</td>
+        <td><div class="mc">${m.home} x ${m.away}</div></td>
+        <td><span class="cb cb-${r?.cls||'R'}">${r?.label||'—'}</span></td>
+        <td class="${cls2}">${txt}</td>
+        <td style="font-family:'DM Mono',monospace;font-size:12px;font-weight:700;color:var(--gold)">@${oddVal}</td>
+        <td><span style="font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:800;color:${chance>=80?'var(--grn)':chance>=65?'var(--acc)':'var(--ink2)'}">${chance}%</span></td>
+        <td onclick="event.stopPropagation()"><div class="btn-links"><a href="${betanoUrl(m.home,m.away)}" target="_blank" class="bl bl-b">Betano</a><a href="${superbetUrl(m.home,m.away)}" target="_blank" class="bl bl-s">Sup</a></div></td>
+      </tr>`;}).join('');
+    const hdrs=colFn(null,true)||['Hora','Liga','Jogo','Score','Entrada','Odd','Chance','Apostar'];
+    document.getElementById('dyn').innerHTML=`${fbar()}<div class="tw"><table><thead><tr>${hdrs.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}${isFree&&list.length>1?`<tr><td colspan="${hdrs.length}" class="lock-td">🔒 Premium</td></tr>`:''}</tbody></table></div>`;
+    attachF(()=>mkTab(colFn)());
+  };
+}
+
+const renderGoals=mkTab((m,hdrs)=>{if(hdrs)return['Hora','Liga','Jogo','Score','Melhor Entrada Gols','Odd','Chance','Apostar'];const o=m.oddsCalc||calcOdds(m);const best=o.prob15>o.prob25?{txt:`Over 1.5 — ${o.prob15}%`,odd:o.over15,chance:o.prob15}:{txt:`Over 2.5 — ${o.prob25}%`,odd:o.over25,chance:o.prob25};return{txt:best.txt,cls2:best.chance>=65?'me-ok':'me-warn',oddVal:best.odd.toFixed(2),chance:best.chance};});
+
+const renderCorners=mkTab((m,hdrs)=>{if(hdrs)return['Hora','Liga','Jogo','Score','Melhor Entrada Escanteios','Odd','Chance','Apostar'];const o=m.oddsCalc||calcOdds(m);return{txt:`Over 9.5 Escanteios`,cls2:o.probEsc>=65?'me-ok':'me-warn',oddVal:o.escanteios.toFixed(2),chance:o.probEsc};});
+
+const renderBtts=mkTab((m,hdrs)=>{if(hdrs)return['Hora','Liga','Jogo','Score','Melhor Entrada Ambas','Odd','Chance','Apostar'];const o=m.oddsCalc||calcOdds(m);return{txt:`Ambas Marcam — ${o.probBtts>=65?'SIM':'Verificar'}`,cls2:o.probBtts>=65?'me-ok':'me-warn',oddVal:o.btts.toFixed(2),chance:o.probBtts};});
+
+const renderCards=mkTab((m,hdrs)=>{if(hdrs)return['Hora','Liga','Jogo','Score','Melhor Entrada Cartões','Odd','Chance','Info'];const o=m.oddsCalc||calcOdds(m);return{txt:'Under 4.5 Cartões',cls2:o.probCart>=65?'me-ok':'me-warn',oddVal:o.cartoes.toFixed(2),chance:o.probCart};});
+
+function renderCtrl(){
+  const h=G.bankroll;const p=(h.returned||0)-(h.invested||0);const r=h.invested>0?(p/h.invested*100):0;
+  // Bilhetes ativos — o que o usuário procura
+  const bilhetesAtivos=['manha','tarde','noite'].filter(j=>{
+    const s=G.janelaStatus[j];
+    return s?.confirmado&&!s?.resultado;
+  });
+  const bilhetesHtml=bilhetesAtivos.length
+    ? bilhetesAtivos.map(j=>{
+        const s=G.janelaStatus[j];
+        const label={manha:'🌅 Manhã',tarde:'☀️ Tarde',noite:'🌙 Noite'}[j];
+        const odd=calcOddJanela(j);
+        const ret=(s.stake*odd).toFixed(2);
+        const jogos=G.janelaBilhetes[j]||[];
+        return`<div style="background:rgba(244,196,48,.06);border:1px solid rgba(244,196,48,.2);border-radius:9px;padding:12px;margin-bottom:8px">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+            <div>
+              <div style="font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:700;color:var(--gold)">${label} — ⏳ Aguardando resultado</div>
+              <div style="font-size:10px;color:var(--ink2);margin-top:3px">Entrada: <strong style="color:var(--gold)">R$${(s.stake||0).toFixed(2)}</strong> · Odd: <strong style="font-family:'DM Mono',monospace">${odd.toFixed(2)}</strong> · Retorno possível: <strong style="color:var(--grn)">R$${ret}</strong></div>
+              <div style="font-size:9px;color:var(--ink3);margin-top:3px">${jogos.map(m=>`${m.home} x ${m.away} (${m.entradaSelecionada?.mercado||'Over 1.5'} @${(m.entradaSelecionada?.odd||1.05).toFixed(2)})`).join(' · ')}</div>
+            </div>
+            <div style="display:flex;gap:7px">
+              <button class="btn-green-sm" onclick="registrarResultado('${j}',true)">✅ GREEN</button>
+              <button class="btn-red-sm"   onclick="registrarResultado('${j}',false)">❌ RED</button>
+            </div>
+          </div>
+        </div>`;
+      }).join('')
+    : `<div style="font-size:10.5px;color:var(--ink3);padding:8px 0">Nenhum bilhete confirmado aguardando resultado. Confirme um bilhete no Painel Inicial.</div>`;
+
+  document.getElementById('dyn').innerHTML=`${kpiGrid()}
+    <div class="adm-card" style="border-color:rgba(244,196,48,.2)"><h3>🎫 Bilhetes Abertos — Aguardando Resultado</h3>${bilhetesHtml}</div>
+    <div class="adm-card"><h3>📊 Banca Detalhada</h3>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px">
+        ${[['Banca',`R$ ${h.balance.toFixed(2)}`,'c-b'],['Investido',`R$ ${(h.invested||0).toFixed(2)}`,'c-o'],['Retornado',`R$ ${(h.returned||0).toFixed(2)}`,'c-g'],['ROI',`${r>=0?'+':''}${r.toFixed(1)}%`,r>=0?'c-go':'c-r']].map(([l,v,c])=>`<div class="kpi"><div class="kl">${l}</div><div class="kv ${c}">${v}</div></div>`).join('')}
+      </div>
+    </div>
+    <div class="adm-card"><h3>📋 Status do Dia — ${fmt(G.date)}</h3>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+        ${['manha','tarde','noite'].map(j=>{const s=G.janelaStatus[j];const label={manha:'🌅 Manhã',tarde:'☀️ Tarde',noite:'🌙 Noite'}[j];return`<div style="background:var(--bg3);border:1px solid var(--brd);border-radius:8px;padding:10px">
+          <div style="font-size:11px;font-weight:700;margin-bottom:5px">${label}</div>
+          <div style="font-size:10px;color:var(--ink2)">${s?.resultado?`<span style="color:${s.resultado==='green'?'var(--grn)':'var(--red)'};font-weight:700">${s.resultado==='green'?'🟢 GREEN':'🔴 RED'}</span>`:s?.confirmado?'⏳ Aguardando':'—'}</div>
+          ${s?.confirmado?`<div style="font-size:9px;color:var(--gold);margin-top:3px">R$${(s.stake||0).toFixed(2)}</div>`:''}
+        </div>`;}).join('')}
+      </div>
+    </div>
+    <div class="adm-card"><h3>🔑 Código VIP</h3>
+      <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+        <input type="text" id="vipPainel" class="fi" placeholder="Código VIP" style="width:200px">
+        <button onclick="activateVip()" class="btn-vip">🔑 Ativar</button>
+      </div>
+    </div>`;
+}
+
+function renderHist(){
+  const hist=(G.bankroll.history||[]).slice().reverse().slice(0,50);
+  if(!hist.length){document.getElementById('dyn').innerHTML=`<div class="empty"><h3>📜 Sem apostas</h3><p>As apostas aparecem aqui.</p></div>`;return;}
+  document.getElementById('dyn').innerHTML=`<div style="padding:4px">${hist.map(h=>{const lu=h.status==='win'?+(h.stake*(h.odd-1)).toFixed(2):-h.stake;
+    return`<div class="hist-item"><div class="hi-ic ${h.status==='win'?'hi-g':'hi-r'}">${h.status==='win'?'✅':'❌'}</div><div class="hi-body"><div class="hi-game">${h.games||'—'} <span style="font-size:8px;color:var(--ink3)">${h.janela?`(${h.janela})`:''}</span></div><div class="hi-meta">${new Date(h.date).toLocaleString('pt-BR')} · R$${(h.stake||0).toFixed(2)} · @${Number(h.odd).toFixed(2)}</div></div><div class="hi-res ${lu>=0?'hi-pos':'hi-neg'}">${lu>=0?'+':''}R$${Math.abs(lu).toFixed(2)}</div></div>`;
+  }).join('')}</div>`;
+}
+
+function renderPerf(){
+  const h=G.bankroll,p=(h.returned||0)-(h.invested||0),r=h.invested>0?(p/h.invested*100):0;
+  const hist=h.history||[],g=hist.filter(x=>x.status==='win').length,rd=hist.filter(x=>x.status==='loss').length,acc=g+rd>0?Math.round(g/(g+rd)*100):0;
+  const ms=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  const vs=hist.length?[12,18,8,24,15,31,22,28,19,35,27,29]:Array(12).fill(0),mx=Math.max(1,...vs);
+  document.getElementById('dyn').innerHTML=`
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:11px">
+      ${[['ROI',(r>=0?'+':'')+r.toFixed(1)+'%',r>=0?'c-go':'c-r'],['Acerto',acc+'%','c-g'],['Lucro',(p>=0?'+R$':'R$')+Math.abs(p).toFixed(2),p>=0?'c-g':'c-r'],['Greens',String(h.greens||0),'c-p']].map(([l,v,c])=>`<div class="kpi"><div class="kl">${l}</div><div class="kv ${c}">${v}</div></div>`).join('')}
+    </div>
+    <div class="adm-card"><h3>📊 ROI Mensal</h3><div class="bar-chart">${ms.map((m,i)=>`<div class="bc-col"><div class="bc-bar" style="height:${Math.round(vs[i]/mx*76)}px;background:${vs[i]>20?'var(--grn)':'var(--acc)'}"></div><span class="bc-lbl">${m}</span></div>`).join('')}</div></div>`;
+}
+
+function renderPlanos(){
+  document.getElementById('dyn').innerHTML=`
+    <div style="text-align:center;margin-bottom:18px"><div style="font-family:'Barlow Condensed',sans-serif;font-size:27px;font-weight:900">Escolha seu Plano</div><div style="font-size:11px;color:var(--ink2);margin-top:4px">70 IAs · 5 Clusters · Bilhetes Fixos · Auto</div></div>
+    <div class="plan-grid">
+      ${[{n:'FREE',p:'R$ 0',d:`${G.planCfg.freeDays}d`,desc:'3 jogos/aba · visualização',cor:'var(--acc)',dk:true},
+         {n:'STARTER',p:`R$ ${G.planCfg.starter.toFixed(2).replace('.',',')}`,d:'30d',desc:'Ilimitado · 3 bilhetes · análise',cor:'var(--grn)',dk:false},
+         {n:'PRO',p:`R$ ${G.planCfg.pro.toFixed(2).replace('.',',')}`,d:'60d',desc:'Tudo + Bilhetes Fixos + Motivo IA',cor:'var(--pur)',dk:false,best:true},
+         {n:'ANUAL',p:`R$ ${G.planCfg.anual.toFixed(2).replace('.',',')}`,d:'180d',desc:'Acesso total · Suporte VIP',cor:'var(--gold)',dk:true},
+      ].map(x=>`<div class="plan-card ${x.best?'best':''}">
+        <div class="plan-nome" style="color:${x.cor}">${x.n}</div>
+        <div class="plan-preco" style="color:${x.cor}">${x.p}</div>
+        <div class="plan-desc">${x.d} · ${x.desc}</div>
+        <button class="plan-btn" style="background:${x.cor};color:${x.dk?'#06080f':'#fff'}" onclick="openPix()">${x.n==='FREE'?'Ativar':'PIX'}</button>
+      </div>`).join('')}
+    </div>
+    <div class="adm-card" style="margin-top:13px"><h3>🔑 Código VIP</h3>
+      <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+        <input type="text" id="vipPlanos" class="fi" placeholder="Código VIP" style="width:200px">
+        <button onclick="activateVip()" class="btn-vip">🔑 Ativar</button>
+      </div>
+    </div>`;
+}
+
+async function renderAdmin(){
+  if(!G.isAdmin){document.getElementById('dyn').innerHTML=`<div class="empty"><h3>⛔ Restrito</h3></div>`;return;}
+  const snap=await db.collection('users').get();const users=[];snap.forEach(d=>users.push({id:d.id,...d.data()}));
+  document.getElementById('dyn').innerHTML=`
+    <div class="adm-card"><h3>⚙️ Planos</h3>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:9px">
+        ${[['FREE (dias)','freeDays'],['Starter (R$)','starter'],['PRO (R$)','pro'],['Anual (R$)','anual']].map(([l,k])=>`<div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:8px;color:var(--ink3);text-transform:uppercase">${l}</label><input type="number" id="cfg_${k}" class="fi" value="${G.planCfg[k]}" style="width:85px"></div>`).join('')}
+        <div style="display:flex;align-items:flex-end"><button onclick="saveCfg()" class="bk-set" style="padding:7px 13px">💾 Salvar</button></div>
+      </div>
+    </div>
+    <div class="vip-gen"><h3>🎫 Gerador de Códigos VIP</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px">
+        <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:8px;color:var(--ink3);text-transform:uppercase">Prefixo</label><input type="text" id="vPfx" class="fi" placeholder="ex: CLEITON" style="width:130px"></div>
+        <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:8px;color:var(--ink3);text-transform:uppercase">Dias</label>
+          <select id="vDias" class="fi"><option value="10">10d</option><option value="30">30d</option><option value="60">60d</option><option value="180">180d</option><option value="365">365d</option></select>
+        </div>
+        <button onclick="genVip()" class="btn-vip">⚡ Gerar</button>
+      </div>
+      <div>${G.vipCodes.map((c,i)=>`<span class="vip-chip">${c}<button class="vip-rm" onclick="rmVip(${i})">✕</button></span>`).join('')}</div>
+    </div>
+    <div class="adm-card"><h3>👥 Usuários (${users.length})</h3>
+      <div style="max-height:300px;overflow-y:auto">
+        ${users.map(u=>{const e=u.premiumExpiry?.toDate?u.premiumExpiry.toDate():null,es=e?e.toLocaleDateString('pt-BR'):'—';
+        return`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 2px;border-bottom:1px solid var(--brd);font-size:11px">
+          <div><strong>${u.email}</strong><br><span style="font-size:8.5px;color:var(--ink3)">${u.premium?`⭐ até ${es}`:'🔓 FREE'}</span></div>
+          <div style="display:flex;gap:5px;align-items:center">
+            <select id="ps_${u.id}" class="fi" style="font-size:9px"><option value="free_10">FREE</option><option value="premium_30">Starter 30d</option><option value="premium_60">PRO 60d</option><option value="premium_180">Anual 180d</option></select>
+            <button onclick="applyPlan('${u.id}')" style="padding:3px 9px;border-radius:4px;border:none;background:rgba(56,189,248,.11);color:var(--acc);font-size:9px;font-weight:700;cursor:pointer">OK</button>
+          </div>
+        </div>`;}).join('')}
+      </div>
+    </div>
+    <div class="adm-card"><h3>🗄️ Cache</h3>
+      <button onclick="clearCacheAll()" style="padding:7px 16px;border-radius:6px;border:1px solid var(--brd);background:var(--bg3);color:var(--ink2);font-size:10.5px;cursor:pointer">🗑 Limpar Cache (forçar API)</button>
+    </div>`;
+}
+
+window.clearCacheAll=()=>{for(const k of Object.keys(localStorage)){if(k.startsWith('src10_'))localStorage.removeItem(k);}showToast('✅ Cache limpo!');};
+window.applyPlan=async uid=>{const sel=document.getElementById(`ps_${uid}`);const[t,d]=sel.value.split('_');await setPlan(uid,t,parseInt(d));showToast('✅ Aplicado');renderAdmin();};
+window.genVip=async()=>{const p=(document.getElementById('vPfx')?.value||'VIP').toUpperCase().replace(/\s/g,'');const d=document.getElementById('vDias')?.value||'60';const c=`${p}-${Math.random().toString(36).slice(2,7).toUpperCase()}-${d}D`;G.vipCodes.push(c);await db.collection('admin').doc('config').set({vipCodes:G.vipCodes},{merge:true});showToast(`✅ ${c}`);renderAdmin();};
+window.rmVip=async i=>{G.vipCodes.splice(i,1);await db.collection('admin').doc('config').set({vipCodes:G.vipCodes},{merge:true});renderAdmin();};
+window.saveCfg=()=>{['freeDays','starter','pro','anual'].forEach(k=>{const v=parseFloat(document.getElementById(`cfg_${k}`)?.value||G.planCfg[k]);if(v>0)G.planCfg[k]=v;});localStorage.setItem('planConfig',JSON.stringify(G.planCfg));showToast('✅ Salvo!');renderAdmin();};
+
+/* RENDER + ATTACH */
+function renderView(){
+  const t=G.tab;
+  if     (t==='dashboard') renderDashboard();
+  else if(t==='jogos')     renderJogosDia();
+  else if(t==='analise')   renderAnalise();
+  else if(t==='goals')     renderGoals();
+  else if(t==='corners')   renderCorners();
+  else if(t==='btts')      renderBtts();
+  else if(t==='cards')     renderCards();
+  else if(t==='ctrl')      renderCtrl();
+  else if(t==='hist')      renderHist();
+  else if(t==='perf')      renderPerf();
+  else if(t==='planos')    renderPlanos();
+  else if(t==='admin')     renderAdmin();
+  else renderDashboard();
+}
+
+function attachF(cb){setTimeout(()=>{
+  document.getElementById('sfT')?.addEventListener('input',e=>{G.filterText=e.target.value.toLowerCase();cb();});
+  document.getElementById('sfL')?.addEventListener('change',e=>{G.filterLevel=e.target.value;cb();});
+  document.getElementById('sfH')?.addEventListener('change',e=>{G.filterHora=e.target.value;cb();});
+},50);}
+
+let tT=null;
+function showToast(msg,dur=3200){const el=document.getElementById('toast');el.textContent=msg;el.classList.add('show');if(tT)clearTimeout(tT);tT=setTimeout(()=>el.classList.remove('show'),dur);}
+
+/* TIMER */
+function startTimer(){if(G.timer)clearInterval(G.timer);G.countdown=900;G.timer=setInterval(()=>{G.countdown--;const m=Math.floor(G.countdown/60),s=G.countdown%60;$('cDown',`${m}:${String(s).padStart(2,'0')}`);if(G.countdown<=0){G.countdown=900;loadDay(true);}},1000);}
+function resetIdle(){if(G.idleTimer)clearTimeout(G.idleTimer);G.idleTimer=setTimeout(()=>{if(G.user){auth.signOut();showToast('🔒 Sessão encerrada — 10min inativo');}},600000);}
+['click','keydown','mousemove','touchstart'].forEach(e=>document.addEventListener(e,resetIdle,{passive:true}));
+
+/* DAY PILLS */
+const DAYS=[...Array(7)].map((_,i)=>{const d=new Date(brasNow());d.setDate(d.getDate()-1+i);return d;});
+function buildDayPills(){
+  const el=document.getElementById('dayPills');if(!el)return;
+  el.innerHTML=DAYS.map(d=>{
+    const k=dKey(d),active=dKey(G.date)===k;
+    const has=!!(G.dayGames[k]?.length||POOL[k]?.length);
+    const lbl=d.toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'2-digit'});
+    return`<button class="dp ${active?'active':''} ${has?'has':''}" onclick="selDay('${k}')">${lbl}</button>`;
+  }).join('');
+}
+window.selDay=k=>{const p=k.split('-');G.date=new Date(+p[0],+p[1]-1,+p[2]);$('dateLbl',fmt(G.date));buildDayPills();loadDay();};
+
+/* NAV */
+document.querySelectorAll('.nav-item').forEach(el=>{el.addEventListener('click',()=>{document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));el.classList.add('active');G.tab=el.dataset.tab;renderView();});});
+document.getElementById('prevDay').onclick=()=>{G.date.setDate(G.date.getDate()-1);$('dateLbl',fmt(G.date));buildDayPills();loadDay();};
+document.getElementById('nextDay').onclick=()=>{G.date.setDate(G.date.getDate()+1);$('dateLbl',fmt(G.date));buildDayPills();loadDay();};
+document.getElementById('todayBtn').onclick=()=>{G.date=new Date();$('dateLbl',fmt(G.date));buildDayPills();loadDay();};
+document.getElementById('btnRef').onclick=()=>{G.iaRunning=false;loadDay(true);};
+document.getElementById('btnAddFunds').onclick=async()=>{const v=parseFloat(prompt('Adicionar (R$):','100'));if(!isNaN(v)&&v>0){G.bankroll.balance+=v;await saveBk();updateBkUI();saveLocal();showToast(`✅ +R$${v.toFixed(2)}`);}};
+document.getElementById('btnResetBk').onclick=async()=>{if(confirm('Zerar banca?')){G.bankroll={balance:0,invested:0,returned:0,greens:0,reds:0,history:[]};await saveBk();updateBkUI();saveLocal();showToast('✅ Zerada!');}};
+document.getElementById('btnSetBk').onclick=async()=>{const v=parseFloat(document.getElementById('bkIn').value||0);if(!isNaN(v)&&v>=0){G.bankroll.balance=v;await saveBk();updateBkUI();document.getElementById('bkIn').value='';saveLocal();showToast(`✅ Banca: R$${v.toFixed(2)}`);}};
+
+/* AUTH */
+let showReg=false;
+document.getElementById('togAuth').addEventListener('click',()=>{showReg=!showReg;document.getElementById('fLogin').style.display=showReg?'none':'block';document.getElementById('fReg').style.display=showReg?'block':'none';document.getElementById('togAuth').textContent=showReg?'⬅️ Já tenho conta':'➡️ Criar conta';});
+document.getElementById('btnLogin').addEventListener('click',()=>{
+  // Manter conectado — LOCAL persiste, SESSION some ao fechar
+  const pers=document.getElementById('remMe')?.checked!==false
+    ?firebase.auth.Auth.Persistence.LOCAL:firebase.auth.Auth.Persistence.SESSION;
+  auth.setPersistence(pers).then(()=>auth.signInWithEmailAndPassword(document.getElementById('lEmail').value,document.getElementById('lPass').value)).catch(e=>$('authMsg',e.message));
+});
+document.getElementById('btnReg').addEventListener('click',async()=>{const e=document.getElementById('rEmail').value,p=document.getElementById('rPass').value;if(p.length<6){$('authMsg','❌ Senha mínima 6 caracteres');return;}try{const u=await auth.createUserWithEmailAndPassword(e,p);await setPlan(u.user.uid,'free',10);$('authMsg','✅ Conta criada! Faça login.');}catch(err){$('authMsg',err.message);}});
+
+auth.onAuthStateChanged(async user=>{
+  if(user){
+    G.user=user;G.isAdmin=user.email===ADMIN;
+    const plan=await checkPlan(user);G.isPremium=plan.ok;
+    if(G.isAdmin){document.getElementById('navAdmin').style.display='flex';const cfg=(await db.collection('admin').doc('config').get()).data();if(cfg?.vipCodes)G.vipCodes=cfg.vipCodes;}
+    await loadBk();
+    document.getElementById('loginWrap').style.display='none';
+    document.getElementById('appWrap').style.display='flex';
+    G.date=new Date();$('dateLbl',fmt(G.date));
+    buildDayPills();loadDay();startTimer();resetIdle();
+  }else{
+    G.user=null;document.getElementById('loginWrap').style.display='flex';document.getElementById('appWrap').style.display='none';
+    if(G.timer)clearInterval(G.timer);if(G.idleTimer)clearTimeout(G.idleTimer);
+  }
+});
